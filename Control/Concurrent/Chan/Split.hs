@@ -14,7 +14,7 @@ module Control.Concurrent.Chan.Split (
 -- For 'writeList2Chan', as in vanilla Chan
 import System.IO.Unsafe ( unsafeInterleaveIO ) 
 import Control.Concurrent.MVar
-import Control.Exception (mask_, evaluate)
+import Control.Exception (mask_)
 import Data.Typeable
 
 import Control.Concurrent.Chan.Split.Internal
@@ -32,23 +32,24 @@ readChan (OutChan w r) = mask_ $ do  -- N.B. mask_
                       return a
          [] -> do pzs <- takeMVar w
                   case pzs of 
-                    (Positive [])-> do
-                        this <- newEmptyMVar
-                        -- unblock writers:
-                        putMVar w (Negative this)
-                        -- block until writer delivers:
-                        a <- takeMVar this  -- (*)
-                     -- INVARIANT: `w` is `Positive` before this point
-                        -- unblock other readers:
-                        putMVar r [] 
-                        return a
-                    (Positive zs) -> do
-                        -- unblock writers ASAP:
-                        putMVar w emptyStack
-                        (a:as) <- evaluate $ reverse zs
-                        -- unblock other readers:
-                        putMVar r as
-                        return a
+                    (Positive zs) ->
+                      case reverse zs of
+                        (a:as) -> do
+                            -- unblock writers ASAP:
+                            putMVar w emptyStack
+                            -- unblock other readers with tail:
+                            putMVar r as
+                            return a
+                        [] -> do
+                            this <- newEmptyMVar
+                            -- unblock writers:
+                            putMVar w (Negative this)
+                            -- block until writer delivers:
+                            a <- takeMVar this  -- (*)
+                         -- INVARIANT: `w` becomes `Positive` before this point
+                            -- unblock other readers:
+                            putMVar r [] 
+                            return a
                     _ -> error "Invariant broken: a Negative write side should only be visible to writers"
 
 
@@ -60,7 +61,7 @@ writeChan (InChan w) = \a -> mask_ $ do  -- N.B. mask_
          (Positive as) -> putMVar w $ Positive (a:as)
          (Negative waiter) -> do 
             -- unblock other writers:
-            putMVar w emptyStack -- N.B. must not reorder
+            putMVar w emptyStack         -- N.B. must not reorder
             -- unblock first reader (*):
             putMVar waiter a
                  
