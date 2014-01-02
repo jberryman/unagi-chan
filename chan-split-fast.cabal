@@ -18,8 +18,8 @@ cabal-version:       >=1.10
 library
   exposed-modules:     Control.Concurrent.Chan.Split
                      , Control.Concurrent.Chan.Split.Internal
-  -- other-modules:       
-  -- other-extensions:    
+
+  ghc-options:        -Wall
+
   build-depends:       base >=4.6 && <4.7
-  -- hs-source-dirs:      
   default-language:    Haskell2010

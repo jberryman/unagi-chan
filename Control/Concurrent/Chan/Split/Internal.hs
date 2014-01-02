@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -funbox-strict-fields #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 module Control.Concurrent.Chan.Split.Internal (
    -- | Unsafe implementation details. This interface will not be stable across
@@ -5,7 +6,7 @@ module Control.Concurrent.Chan.Split.Internal (
    Stack(..), W, R, emptyStack, InChan(..), OutChan(..)
    ) where
 
-import Data.Typeable
+import Data.Typeable(Typeable)
 import Control.Concurrent.MVar
 
 data Stack a = Positive [a] 

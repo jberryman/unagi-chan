@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -funbox-strict-fields #-}
 module Control.Concurrent.Chan.Split (
     -- * Creating channels
       newSplitChan
@@ -19,6 +18,7 @@ import Control.Exception (mask_, evaluate)
 import Data.Typeable
 
 import Control.Concurrent.Chan.Split.Internal
+
 
 
 -- TODO are we handling exceptions correctly?
@@ -98,6 +98,9 @@ writeList2Chan ch = sequence_ . map (writeChan ch)
 -- TODO implement, see if worth restructuring again to avoid the double
 -- 'reverse'. Perhaps reverse . reverse gets rewrittern? If so make a note to
 -- keep constructor lazy 
+--
+-- Then add rewrite rules. Make sure it works with replicateM.
+--
 -- | Like 'writeList2Chan' but writes the entire finite list before 
 atomicallyWrite
 
