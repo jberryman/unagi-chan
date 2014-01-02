@@ -22,9 +22,11 @@ import Control.Concurrent.Chan.Split.Internal
 
 
 -- TODO are we handling exceptions correctly?
+--      currently a blocked reader can't be killed (I think)
 
 -- | Read the next value from the output side of a chan.
 readChan :: OutChan a -> IO a
+{-# INLINABLE readChan #-}
 readChan (OutChan w r) = mask_ $ do  -- N.B. mask_
     dequeued <- takeMVar r
     case dequeued of
@@ -55,6 +57,7 @@ readChan (OutChan w r) = mask_ $ do  -- N.B. mask_
 
 -- | Write a value to the input side of a chan.
 writeChan :: InChan a -> a -> IO ()
+{-# INLINABLE writeChan #-}
 writeChan (InChan w) = \a -> mask_ $ do  -- N.B. mask_
     st <- takeMVar w
     case st of 
@@ -69,6 +72,7 @@ writeChan (InChan w) = \a -> mask_ $ do  -- N.B. mask_
 
 -- | Create a new channel, returning read and write ends.
 newSplitChan :: IO (InChan a, OutChan a)
+{-# INLINABLE newSplitChan #-}
 newSplitChan = do
     w <- newMVar emptyStack
     r <- newMVar []
@@ -93,6 +97,7 @@ getChanContents ch = unsafeInterleaveIO (do
 -- | Write an entire list of items to a chan type. Writes here from multiple
 -- threads may be interleaved, and infinite lists are supported.
 writeList2Chan :: InChan a -> [a] -> IO ()
+{-# INLINABLE writeList2Chan #-}
 writeList2Chan ch = sequence_ . map (writeChan ch)
 
 {-
@@ -105,5 +110,7 @@ writeList2Chan ch = sequence_ . map (writeChan ch)
 -- | Like 'writeList2Chan' but writes the entire finite list before 
 atomicallyWrite
 
-atomicallyTake
+atomicallyReadN
+
+atomicallyReadAll
 -}
