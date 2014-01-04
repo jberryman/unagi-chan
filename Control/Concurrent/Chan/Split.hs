@@ -84,9 +84,8 @@ readChan (OutChan w r) = mask_ $ do
                             -- BLOCK until writer delivers:
                             a <- takeMVar this -- (*) -- INTERRUPTIBLE; wait for next writer in forked thread
                                     `onException`
-                                        forkIO (takeMVar this >>= putMVar r . return)
+                                        forkIO (do a<-takeMVar this `onException` putMVar r []; putMVar r [a])
                                         -- Will this fire on BlockedIndefinitely ?
-                                        -- Any reason to mask above?
 
                             -- INVARIANT: `w` becomes `Positive` before we unblock above
                             putMVar r [] -- unblocking other readers
