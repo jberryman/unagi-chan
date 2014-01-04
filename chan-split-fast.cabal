@@ -26,6 +26,9 @@ library
 
 test-suite test
   type: exitcode-stdio-1.0
+  
+  --     -qa  -feager-blackholing  -qg1
+  ghc-options: -O2  -rtsopts  -threaded -with-rtsopts=-N
 
   hs-source-dirs: tests, ./
                  
