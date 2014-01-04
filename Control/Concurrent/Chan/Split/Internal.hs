@@ -3,7 +3,7 @@
 module Control.Concurrent.Chan.Split.Internal (
    -- | Unsafe implementation details. This interface will not be stable across
    -- versions.
-   Stack(..), W, R, emptyStack, InChan(..), OutChan(..)
+   Stack(..), W, R, InChan(..), OutChan(..)
    ) where
 
 import Data.Typeable(Typeable)
@@ -14,8 +14,6 @@ data Stack a = Positive [a]
 
 type W a = MVar (Stack a)
 type R a = MVar [a]
-emptyStack :: Stack a
-emptyStack = Positive []
 
 -- | The \"write side\" of a channel.
 newtype InChan a = InChan (W a)

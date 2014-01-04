@@ -14,43 +14,82 @@ module Control.Concurrent.Chan.Split (
 -- For 'writeList2Chan', as in vanilla Chan
 import System.IO.Unsafe ( unsafeInterleaveIO ) 
 import Control.Concurrent.MVar
-import Control.Exception (mask_)
+import Control.Exception (mask_, onException)
 import Data.Typeable
 
+import Control.Concurrent(forkIO)
 import Control.Concurrent.Chan.Split.Internal
 
 
+-- TODO look closely at the two distinct timing samples for the 2x2 test
 
--- TODO are we handling exceptions correctly?
---      currently a blocked reader can't be killed (I think)
+-- -----
+-- TODO s
+--   - tests
+--      - figure out how masking/exceptions in blocks work
+--      - fix that shit
+--      - test performance again (old), then add-source and test again (compare with notes)
+--   - move in performance benchmarks and start regression testing
+--   - blackholing
+--   - other op
+--   - write/read many, readAll
+-- -----
+
+-- TODO consider making the MVar in Negative contain a stack if the next writer
+-- is a group write.
+--
+-- TODO consider replacing write side with `writeChan` IO action
+--       - this would make for easy blackholing
+--       - would make the new Positive/Negative constructor unnecessary
+--       - actually, this could be very clever; the writer function need only put a list
+--            ...but would we need another MVar...?
+--
+-- TODO test having the newly-unblocked reader check again for new messages on
+-- write side before unblocking readers, maybe even using `yield`
+--
+-- TODO consider creating a newMVar just once always to be passed to the writer
+-- on Negative (only ever written to be one)
+--
+-- OPTIMIZATIONS TODO
+--   - create a very simple 'Main' for looking at core
+--   - optimizing branches (try this last)
+--      - Debug.Trace to see branches taken for different tests
+--      - look at case alternatives order
+--      - adding NOINLINE where clauses for unlikely or already slow, see #849
+
+emptyStack :: Stack a
+emptyStack = Positive []
+
 
 -- | Read the next value from the output side of a chan.
 readChan :: OutChan a -> IO a
 {-# INLINABLE readChan #-}
-readChan (OutChan w r) = mask_ $ do  -- N.B. mask_
-    dequeued <- takeMVar r
+readChan (OutChan w r) = mask_ $ do
+    dequeued <- takeMVar r  -- INTERRUPTIBLE; okay
     case dequeued of
          (a:as) -> do putMVar r as 
                       return a
-         [] -> do pzs <- takeMVar w
+         [] -> do pzs <- takeMVar w -- INTERRUPTIBLE; replace `dequeued`
+                            `onException` (putMVar r [])
                   case pzs of 
                     (Positive zs) ->
                       case reverse zs of
                         (a:as) -> do
-                            -- unblock writers ASAP:
-                            putMVar w emptyStack
-                            -- unblock other readers with tail:
-                            putMVar r as
+                            putMVar w emptyStack -- unblocking writers ASAP
+                            putMVar r as -- unblocking other readers with tail
                             return a
                         [] -> do
                             this <- newEmptyMVar
-                            -- unblock writers:
-                            putMVar w (Negative this)
-                            -- block until writer delivers:
-                            a <- takeMVar this  -- (*)
-                         -- INVARIANT: `w` becomes `Positive` before this point
-                            -- unblock other readers:
-                            putMVar r [] 
+                            putMVar w (Negative this) -- unblocking writers
+                            -- BLOCK until writer delivers:
+                            a <- takeMVar this -- (*) -- INTERRUPTIBLE; wait for next writer in forked thread
+                                    `onException`
+                                        forkIO (takeMVar this >>= putMVar r . return)
+                                        -- Will this fire on BlockedIndefinitely ?
+                                        -- Any reason to mask above?
+
+                            -- INVARIANT: `w` becomes `Positive` before we unblock above
+                            putMVar r [] -- unblocking other readers
                             return a
                     _ -> error "Invariant broken: a Negative write side should only be visible to writers"
 
@@ -58,15 +97,14 @@ readChan (OutChan w r) = mask_ $ do  -- N.B. mask_
 -- | Write a value to the input side of a chan.
 writeChan :: InChan a -> a -> IO ()
 {-# INLINABLE writeChan #-}
-writeChan (InChan w) = \a -> mask_ $ do  -- N.B. mask_
-    st <- takeMVar w
+writeChan (InChan w) = \a -> mask_ $ do
+    st <- takeMVar w -- INTERRUPTIBLE; okay
     case st of 
          (Positive as) -> putMVar w $ Positive (a:as)
          (Negative waiter) -> do 
-            -- unblock other writers:
-            putMVar w emptyStack         -- N.B. must not reorder
-            -- unblock first reader (*):
-            putMVar waiter a
+            -- N.B. must not reorder
+            putMVar w emptyStack -- unblocking other writers
+            putMVar waiter a -- unblocking first reader (*)
                  
 
 
@@ -79,10 +117,6 @@ newSplitChan = do
     return (InChan w, OutChan w r)
 
 
-
--- takeAll -- actually we need internal access to avoid reading readerDeq
--- takeN
--- putN
 
 
 -- | Return a lazy list representing the contents of the supplied OutChan, much
