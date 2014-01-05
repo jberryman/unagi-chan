@@ -16,7 +16,7 @@ main = do
     defaultMainQSem
     -- "check for deadlocks":
     let tries = 100
-    putStrLn $ "Checking for deadlocks x"++show tries
+    putStrLn $ "Checking for deadlocks from killed reader, x"++show tries
     mainChan002 tries
-    putStrLn ""
+    putStrLn $ "Checking for deadlocks from killed writer, x"++show tries
     mainChan003 tries
