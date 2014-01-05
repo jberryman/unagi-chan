@@ -105,7 +105,7 @@ writeChan (InChan w) = \a -> mask_ $ do
          -- INVARIANT: this does not change for the duration of the program
          AWhistlingVoid -> 
           -- unconcerned $
-              return ()
+              putMVar w AWhistlingVoid
 
 {-
 -- | Returns @True@ if the runtime is certain that the channel has no more
