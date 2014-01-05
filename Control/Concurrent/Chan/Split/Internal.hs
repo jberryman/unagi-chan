@@ -11,6 +11,7 @@ import Control.Concurrent.MVar
 
 data Stack a = Positive [a] 
              | Negative { firstWaiting :: !(MVar a) }
+             | AWhistlingVoid
 
 type W a = MVar (Stack a)
 type R a = MVar [a]

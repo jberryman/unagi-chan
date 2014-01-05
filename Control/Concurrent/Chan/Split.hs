@@ -25,10 +25,6 @@ import Control.Concurrent.Chan.Split.Internal
 
 -- -----
 -- TODO s
---   - tests
---      - figure out how masking/exceptions in blocks work
---      - fix that shit
---      - test performance again (old), then add-source and test again (compare with notes)
 --   - move in performance benchmarks and start regression testing
 --   - blackholing
 --   - other op
@@ -81,8 +77,8 @@ readChan (OutChan w r) = mask_ $ do
                         [] -> do
                             this <- newEmptyMVar
                             putMVar w (Negative this) -- unblocking writers
-                            -- BLOCK until writer delivers:
-                            a <- takeMVar this -- (*) -- INTERRUPTIBLE; wait for next writer in forked thread
+                            -- (*) BLOCK until writer delivers:
+                            a <- takeMVar this -- INTERRUPTIBLE; wait for next writer in forked thread
                                     `onException`
                                         forkIO (do a<-takeMVar this `onException` putMVar r []; putMVar r [a])
                                         -- Will this fire on BlockedIndefinitely ?
@@ -90,7 +86,9 @@ readChan (OutChan w r) = mask_ $ do
                             -- INVARIANT: `w` becomes `Positive` before we unblock above
                             putMVar r [] -- unblocking other readers
                             return a
-                    _ -> error "Invariant broken: a Negative write side should only be visible to writers"
+
+                    (Negative _) -> error "a Negative write side should only be visible to writers"
+                    AWhistlingVoid -> error "Write side marked dead when there were more readers"
 
 
 -- | Write a value to the input side of a chan.
@@ -104,8 +102,27 @@ writeChan (InChan w) = \a -> mask_ $ do
             -- N.B. must not reorder
             putMVar w emptyStack -- unblocking other writers
             putMVar waiter a -- unblocking first reader (*)
-                 
+         -- INVARIANT: this does not change for the duration of the program
+         AWhistlingVoid -> 
+          -- unconcerned $
+              return ()
 
+{-
+-- | Returns @True@ if the runtime is certain that the channel has no more
+-- readers. This may return @False@ even when no other reads are possible, and
+-- is not guaranteed to return @True@ in any timely manner.
+--
+-- A 'writeChan' on an 'InChan' that would return @True@ here is a no-op, so
+-- it's not necessary to use this to prevent space leaks.
+isDefinitelyDead :: InChan a -> Bool
+{-# INLINABLE isDefinitelyDead #-}
+isDefinitelyDead (InChan w) = do
+    st <- readMVar w
+    return $
+      case st of 
+           AWhistlingVoid -> True
+           _ -> False
+-}
 
 -- | Create a new channel, returning read and write ends.
 newSplitChan :: IO (InChan a, OutChan a)
@@ -113,6 +130,13 @@ newSplitChan :: IO (InChan a, OutChan a)
 newSplitChan = do
     w <- newMVar emptyStack
     r <- newMVar []
+    -- A finalizer to black-hole writes once all readers disappear.
+    mkWeakMVar r $
+        modifyMVar_ w (const $ return AWhistlingVoid)
+        -- NOTE: This means we must be very careful to keep the read var alive
+        -- if we want to do reads using the Internals, e.g. when we know there
+        -- is only one reader.
+        -- TODO a version in Internal that returns an IO finalizer action with chans.
     return (InChan w, OutChan w r)
 
 
