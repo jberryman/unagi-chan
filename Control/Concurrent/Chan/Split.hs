@@ -45,7 +45,9 @@ import Control.Concurrent.Chan.Split.Internal
 --            ...but would we need another MVar...?
 --
 -- TODO test having the newly-unblocked reader check again for new messages on
--- write side before unblocking readers, maybe even using `yield`
+-- write side before unblocking readers, maybe even using `yield`. We could
+-- also add a 'yield' in write, after `putMVar w emptyStack` to get more
+-- writers going
 --
 -- TODO consider creating a newMVar just once always to be passed to the writer
 -- on Negative (only ever written to be one)
