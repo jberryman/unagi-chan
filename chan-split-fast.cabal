@@ -39,7 +39,7 @@ test-suite test
 
 
 test-suite core-example
-  -- see dist/build/core-example/core-example-tmp/core-example/Main.dump-simpl
+  -- for n in `find dist/build/core-example/core-example-tmp -name '*dump-simpl'`; do cp $n "core-example/$(basename $n).$(git rev-parse --abbrev-ref HEAD)"; done
   
   type: exitcode-stdio-1.0
   ghc-options: -O2  -rtsopts  -threaded -with-rtsopts=-N  
