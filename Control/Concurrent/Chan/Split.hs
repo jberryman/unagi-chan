@@ -14,7 +14,7 @@ module Control.Concurrent.Chan.Split (
 -- For 'writeList2Chan', as in vanilla Chan
 import System.IO.Unsafe ( unsafeInterleaveIO ) 
 import Control.Concurrent.MVar
-import Control.Exception (mask_, onException)
+import Control.Exception (mask_, onException, evaluate)
 import Data.Typeable
 
 import Control.Concurrent(forkIO)
@@ -22,7 +22,6 @@ import Control.Concurrent.Chan.Split.Internal
 
 -- TODO
 --  - more optimizations
---      - make sure puts are strict
 --      - keeping blocking var
 --      - fancy yield on blocked reader
 --      - profile with demo Main
@@ -85,15 +84,14 @@ writeChan :: InChan a -> a -> IO ()
 writeChan (InChan w) = \a -> mask_ $ do
     st <- takeMVar w -- INTERRUPTIBLE; okay
     case st of 
-         (Positive as) -> putMVar w $ Positive (a:as)
+         (Positive as) -> let aas = a:as
+                           in evaluate aas >> (putMVar w $ Positive aas)
          (Negative waiter) -> do 
             -- N.B. must not reorder
             putMVar w emptyStack -- unblocking other writers
             putMVar waiter a -- unblocking first reader (*)
          -- INVARIANT: this does not change for the duration of the program
-         Dead -> 
-          -- unconcerned $
-              putMVar w Dead
+         Dead -> putMVar w Dead
 
 {-
 -- | Returns @True@ if the runtime is certain that the channel has no more
