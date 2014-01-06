@@ -20,39 +20,12 @@ import Data.Typeable
 import Control.Concurrent(forkIO)
 import Control.Concurrent.Chan.Split.Internal
 
--- ---------
--- Try reverting newSplitChan changes
---    Yes. Perhaps code bloat from newSplitChan is stopping the *test itself* from being inlined into main?
---      Try adding INLINE pragma to the test itself
---        NO
---      Try NOINLINING the mkWeakMVar call
---        NO
---      Try with a finalizer of return ()
---        NO, nor did forkIOs anywhere help
---      Hypothesis:
---        This has something to do with thread scheduling?
---        Try the same modification, but with commented line.
---      Compare core and STG with and without finalizer line commented
---      Try moving Negative and AWhistlingVoid into its own type, and maybe doing NoInline
--- NOTES:
---   Adding even a `return ()` finalizer caused apparent regression on the
---   async tests with 2 reader and 2 writers, and 1 reader and 3 writers.
---   Commenting the mkWeakMVar line was enough to make it disappear.  Strangely
---   I found that arranging the tests to launch readers (blocking) and then
---   writers actually gave the previous performance profile.  Even more
---   strange, then keeping the new test but running without the finalizer
---   caused a comparable performance hit I was seeing with the inverse!
--- ---------
+-- TODO
+--  - more optimizations
+--  - maybe implement batched reads/writes
+--  - do some benchmarks on an 8-core machine!
 
 -- TODO look at all our puts and make strict! (esp. the writer; or make Positive have ! strict field)
-
--- -----
--- TODO s
---   - move in performance benchmarks and start regression testing
---   - blackholing
---   - other op
---   - write/read many, readAll
--- -----
 
 -- TODO consider making the MVar in Negative contain a stack if the next writer
 -- is a group write.
@@ -111,7 +84,7 @@ readChan (OutChan w r) = mask_ $ do
                             return a
 
                     (Negative _) -> error "a Negative write side should only be visible to writers"
-                    AWhistlingVoid -> error "Write side marked dead when there were more readers"
+                    Dead -> error "Write side marked dead when there were more readers"
 
 
 -- | Write a value to the input side of a chan.
@@ -126,9 +99,9 @@ writeChan (InChan w) = \a -> mask_ $ do
             putMVar w emptyStack -- unblocking other writers
             putMVar waiter a -- unblocking first reader (*)
          -- INVARIANT: this does not change for the duration of the program
-         AWhistlingVoid -> 
+         Dead -> 
           -- unconcerned $
-              putMVar w AWhistlingVoid
+              putMVar w Dead
 
 {-
 -- | Returns @True@ if the runtime is certain that the channel has no more
@@ -143,7 +116,7 @@ isDefinitelyDead (InChan w) = do
     st <- readMVar w
     return $
       case st of 
-           AWhistlingVoid -> True
+           Dead -> True
            _ -> False
 -}
 
@@ -155,7 +128,7 @@ newSplitChan = do
     r <- newMVar []
     -- A finalizer to black-hole writes once all readers disappear.
     mkWeakMVar r $
-        modifyMVar_ w (const $ return AWhistlingVoid)
+        modifyMVar_ w (const $ return Dead)
         -- NOTE: This means we must be very careful to keep the read var alive
         -- if we want to do reads using the Internals, e.g. when we know there
         -- is only one reader.

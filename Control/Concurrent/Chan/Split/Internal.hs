@@ -9,9 +9,9 @@ module Control.Concurrent.Chan.Split.Internal (
 import Data.Typeable(Typeable)
 import Control.Concurrent.MVar
 
-data Stack a = Positive [a] 
-             | Negative { firstWaiting :: !(MVar a) }
-             | AWhistlingVoid
+data Stack a = Positive [a]
+             | Negative !(MVar a) -- first waiting reader blocked
+             | Dead               -- all readers GCd
 
 type W a = MVar (Stack a)
 type R a = MVar [a]
@@ -21,5 +21,5 @@ newtype InChan a = InChan (W a)
     deriving (Eq, Typeable)
 
 -- | The \"read side\" of a channel.
-data OutChan a = OutChan { writerStack :: !(W a),  readerDeq :: !(R a) }
+data OutChan a = OutChan !(W a) !(R a)
     deriving (Eq, Typeable)
