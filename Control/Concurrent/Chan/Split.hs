@@ -20,8 +20,31 @@ import Data.Typeable
 import Control.Concurrent(forkIO)
 import Control.Concurrent.Chan.Split.Internal
 
+-- ---------
+-- Try reverting newSplitChan changes
+--    Yes. Perhaps code bloat from newSplitChan is stopping the *test itself* from being inlined into main?
+--      Try adding INLINE pragma to the test itself
+--        NO
+--      Try NOINLINING the mkWeakMVar call
+--        NO
+--      Try with a finalizer of return ()
+--        NO, nor did forkIOs anywhere help
+--      Hypothesis:
+--        This has something to do with thread scheduling?
+--        Try the same modification, but with commented line.
+--      Compare core and STG with and without finalizer line commented
+--      Try moving Negative and AWhistlingVoid into its own type, and maybe doing NoInline
+-- NOTES:
+--   Adding even a `return ()` finalizer caused apparent regression on the
+--   async tests with 2 reader and 2 writers, and 1 reader and 3 writers.
+--   Commenting the mkWeakMVar line was enough to make it disappear.  Strangely
+--   I found that arranging the tests to launch readers (blocking) and then
+--   writers actually gave the previous performance profile.  Even more
+--   strange, then keeping the new test but running without the finalizer
+--   caused a comparable performance hit I was seeing with the inverse!
+-- ---------
 
--- TODO look closely at the two distinct timing samples for the 2x2 test
+-- TODO look at all our puts and make strict! (esp. the writer; or make Positive have ! strict field)
 
 -- -----
 -- TODO s
@@ -138,7 +161,6 @@ newSplitChan = do
         -- is only one reader.
         -- TODO a version in Internal that returns an IO finalizer action with chans.
     return (InChan w, OutChan w r)
-
 
 
 
