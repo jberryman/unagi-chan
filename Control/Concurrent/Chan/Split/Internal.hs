@@ -9,7 +9,11 @@ module Control.Concurrent.Chan.Split.Internal (
 import Data.Typeable(Typeable)
 import Control.Concurrent.MVar
 
-data Stack a = Positive [a]
+-- NOTE: using a composition list (e.g. putMVar (as . (b:))) was actually
+-- slightly slower than a cons + reverse, regardless of size, however a
+-- composition list could give us the ability to do a "priority" write to the
+-- head of the queue in O(1).
+data Stack a = Positive [a]       -- stack that writers push onto
              | Negative !(MVar a) -- first waiting reader blocked
              | Dead               -- all readers GCd
 

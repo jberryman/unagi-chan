@@ -22,34 +22,24 @@ import Control.Concurrent.Chan.Split.Internal
 
 -- TODO
 --  - more optimizations
+--      - make sure puts are strict
+--      - keeping blocking var
+--      - fancy yield on blocked reader
+--      - profile with demo Main
+--      - NOINLINEs
 --  - maybe implement batched reads/writes
+--      - see if appropriate rewrite rules available
 --  - do some benchmarks on an 8-core machine!
 
--- TODO look at all our puts and make strict! (esp. the writer; or make Positive have ! strict field)
 
 -- TODO consider making the MVar in Negative contain a stack if the next writer
 -- is a group write.
---
--- TODO consider replacing write side with `writeChan` IO action
---       - this would make for easy blackholing
---       - would make the new Positive/Negative constructor unnecessary
---       - actually, this could be very clever; the writer function need only put a list
---            ...but would we need another MVar...?
 --
 -- TODO test having the newly-unblocked reader check again for new messages on
 -- write side before unblocking readers, maybe even using `yield`. We could
 -- also add a 'yield' in write, after `putMVar w emptyStack` to get more
 -- writers going
 --
--- TODO consider creating a newMVar just once always to be passed to the writer
--- on Negative (only ever written to be one)
---
--- OPTIMIZATIONS TODO
---   - create a very simple 'Main' for looking at core
---   - optimizing branches (try this last)
---      - Debug.Trace to see branches taken for different tests
---      - look at case alternatives order
---      - adding NOINLINE where clauses for unlikely or already slow, see #849
 
 emptyStack :: Stack a
 emptyStack = Positive []
