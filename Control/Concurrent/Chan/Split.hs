@@ -22,23 +22,27 @@ import Control.Concurrent.Chan.Split.Internal
 
 -- TODO
 --  - more optimizations
---      - keeping blocking var
---      - fancy yield on blocked reader
 --      - profile with demo Main
---      - NOINLINEs
+--          - compare with Chan and TQueue
+--      - look at LLVM and concurrency-related RTS flags, and -O1; 
+--        see if we should be optimizing for different run target
+--           - try branches again
+--      - NOINLINEs ?
+--      - heuristic for 'yield'ing when x writes occur?
 --  - maybe implement batched reads/writes
---      - see if appropriate rewrite rules available
+--      - see if we can do useful things with rewrite rules
+--          - do a survey of github for writeChan / readChan, etc for ideas
+--          - consider a user-definable "batch size" for rewrite rules, affecting concurrency granularity 
 --  - do some benchmarks on an 8-core machine!
 
 
 -- TODO consider making the MVar in Negative contain a stack if the next writer
 -- is a group write.
---
--- TODO test having the newly-unblocked reader check again for new messages on
--- write side before unblocking readers, maybe even using `yield`. We could
--- also add a 'yield' in write, after `putMVar w emptyStack` to get more
--- writers going
---
+
+-- Other potential capabilities:
+--   - ungetChan
+--   - priority write (if switch to composed functions)
+--   - atomic batched (and more efficient) reads and writes
 
 emptyStack :: Stack a
 emptyStack = Positive []
@@ -67,8 +71,10 @@ readChan (OutChan w r) = mask_ $ do
                             -- (*) BLOCK until writer delivers:
                             a <- takeMVar this -- INTERRUPTIBLE; wait for next writer in forked thread
                                     `onException`
-                                        forkIO (do a<-takeMVar this `onException` putMVar r []; putMVar r [a])
-                                        -- Will this fire on BlockedIndefinitely ?
+                                        forkIO (do a <- takeMVar this 
+                                                        `onException` putMVar r [] -- worst case: we lose the message
+                                                   putMVar r [a]
+                                               )
 
                             -- INVARIANT: `w` becomes `Positive` before we unblock above
                             putMVar r [] -- unblocking other readers
@@ -84,8 +90,7 @@ writeChan :: InChan a -> a -> IO ()
 writeChan (InChan w) = \a -> mask_ $ do
     st <- takeMVar w -- INTERRUPTIBLE; okay
     case st of 
-         (Positive as) -> let aas = a:as
-                           in evaluate aas >> (putMVar w $ Positive aas)
+         (Positive as) -> evaluate (a:as) >>= (putMVar w . Positive)
          (Negative waiter) -> do 
             -- N.B. must not reorder
             putMVar w emptyStack -- unblocking other writers
