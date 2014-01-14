@@ -15,6 +15,10 @@ build-type:          Simple
 -- extra-source-files:  
 cabal-version:       >=1.10
 
+flag dev
+  default: False
+  manual: True
+
 library
   exposed-modules:     Control.Concurrent.Chan.Split
                      , Control.Concurrent.Chan.Split.Internal
@@ -37,15 +41,25 @@ test-suite test
   build-depends:       base >=4.6 && <4.7
   default-language:    Haskell2010
 
-
-test-suite core-example
+-- for profiling, checking out core, etc
+executable dev-example
   -- for n in `find dist/build/core-example/core-example-tmp -name '*dump-simpl'`; do cp $n "core-example/$(basename $n).$(git rev-parse --abbrev-ref HEAD)"; done
-  
-  type: exitcode-stdio-1.0
-  ghc-options: -O2  -rtsopts  -threaded -with-rtsopts=-N  
+  if !flag(dev)
+    buildable: False
+
   ghc-options: -ddump-to-file -ddump-simpl -dsuppress-module-prefixes -dsuppress-uniques -ddump-core-stats -ddump-inlinings
+  ghc-options: -O2  -rtsopts  
+  
+  -- Either do threaded for eventlogging and simple timing...
+  ghc-options: -threaded -with-rtsopts=-N2
+  ghc-options: -eventlog
+  -- ...or do non-threaded runtime
+  --ghc-options: -prof -fprof-auto
+  --Relevant profiling RTS settings:  -xt
+
   hs-source-dirs: core-example, ./
   main-is: Main.hs
   build-depends:       base >=4.6 && <4.7
+                     , stm
   default-language:    Haskell2010
 
