@@ -20,15 +20,20 @@ import Data.Typeable
 import Control.Concurrent(forkIO)
 import Control.Concurrent.Chan.Split.Internal
 
+-- OBSERVATIONS
+--   - throughput on MVar very bad: 300ms/100000 (vs. consistent 19ms for
+--     TVar), and we're seeing exactly that in our 2-writer test
+--   - contention issues between reader and writer is huge
+--       - fairness: readers and writers taking around the same time, so we're
+--          forced to alternate between the two
 
 -- TODO
+--  add eventlog logging of thread starts and ends in test code, and look at threadscope
+--      compare with the best performing 1x1 and 100x100
+--  try changes to address scheduling and contention stuff.
 --  profile with cost-centers added by hand.
 --      run on a single-threaded benchmark, like write some / read some
 --      move any improvements to other branches
---  add eventlog logging of thread starts and ends in test code, and look at threadscope
---      compare with the best performing 1x1 and 100x100
---
---  try new optimization ideas
 
 -- TODO
 --  - more optimizations
