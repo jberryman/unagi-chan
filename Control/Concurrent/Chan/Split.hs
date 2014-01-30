@@ -28,6 +28,7 @@ import Data.IORef
 
 
 newSplitChan :: IO (InChan a, OutChan a)
+{-# INLINABLE newSplitChan #-}
 newSplitChan = do
    hole  <- newEmptyMVar
    readVar  <- newMVar hole
@@ -35,20 +36,22 @@ newSplitChan = do
    return (InChan writeVar, OutChan readVar)
 
 writeChan :: InChan a -> a -> IO ()
-writeChan (InChan writeVar) val = do
+{-# INLINABLE writeChan #-}
+writeChan (InChan writeVar) a = do
   new_hole <- newEmptyMVar
   mask_ $ do
       -- other writers can go
       old_hole <- atomicModifyIORef' writeVar ((,) new_hole)
       -- first reader can go
-      putMVar old_hole (Cons val new_hole)
+      putMVar old_hole (Cons a new_hole)
 
 
 readChan :: OutChan a -> IO a
+{-# INLINABLE readChan #-}
 readChan (OutChan readVar) = do
   modifyMVarMasked readVar $ \read_end -> do -- Note [modifyMVarMasked]
-    (Cons val new_read_end) <- takeMVar read_end
-    return (new_read_end, val)
+    (Cons a new_read_end) <- takeMVar read_end
+    return (new_read_end, a)
 
 
 -- | Return a lazy list representing the contents of the supplied OutChan, much
