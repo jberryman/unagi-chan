@@ -3,27 +3,24 @@
 module Control.Concurrent.Chan.Split.Internal (
    -- | Unsafe implementation details. This interface will not be stable across
    -- versions.
-   Stack(..), W, R, InChan(..), OutChan(..)
+   Cons(..), InChan(..), OutChan(..)
    ) where
 
 import Data.Typeable(Typeable)
 import Control.Concurrent.MVar
+import Data.IORef
 
--- NOTE: using a composition list (e.g. putMVar (as . (b:))) was actually
--- slightly slower than a cons + reverse, regardless of size, however a
--- composition list could give us the ability to do a "priority" write to the
--- head of the queue in O(1).
-data Stack a = Positive [a]       -- stack that writers push onto
-             | Negative !(MVar a) -- first waiting reader blocked
-             | Dead               -- all readers GCd
+-- TODO
+--   replace with IORef
+--   replace nested MVars with top-level lock + unboxed MVar
 
-type W a = MVar (Stack a)
-type R a = MVar [a]
+type Stream a = MVar (Cons a)
+data Cons a = Cons a !(Stream a)
 
--- | The \"write side\" of a channel.
-newtype InChan a = InChan (W a)
+-- | The \"write side\" of a chan pair
+newtype InChan i = InChan (IORef (Stream i)) -- Invariant: Stream i always empty MVar
     deriving (Eq, Typeable)
 
--- | The \"read side\" of a channel.
-data OutChan a = OutChan !(W a) !(R a)
+-- | The \"read side\" of a chan pair
+newtype OutChan i = OutChan (MVar (Stream i)) 
     deriving (Eq, Typeable)
