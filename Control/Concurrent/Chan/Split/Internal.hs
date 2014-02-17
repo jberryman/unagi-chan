@@ -16,11 +16,12 @@ import Data.IORef
 
 type Stream a = MVar (Cons a)
 data Cons a = Cons a !(Stream a)
+            | ConsEmpty !(Stream a)
 
 -- | The \"write side\" of a chan pair
 newtype InChan i = InChan (IORef (Stream i)) -- Invariant: Stream i always empty MVar
     deriving (Eq, Typeable)
 
 -- | The \"read side\" of a chan pair
-newtype OutChan i = OutChan (MVar (Stream i)) 
+newtype OutChan i = OutChan (IORef (Stream i)) 
     deriving (Eq, Typeable)
