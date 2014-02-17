@@ -22,34 +22,12 @@ import Control.Concurrent.Chan.Split.Internal
 import Data.IORef 
 
 
--- check which IO array would be fastest for storing IORefs, in place of readVar/writeVar
---    we already get that with atomic-primops, with MutableArray, supporting CAS
---    ...although a simple `write` is probably sufficient if it doesn't affect
---      correctness and we don't expect contention on each individual Chan to be
---      likely
---    benchmark write and read of MutableArray
---
 -- research data dependencies and memory barriers
 --    in other langs we need a "data dependency barrier"; what about in haskell?
--- benchmark michael-scott queue on 2-cores
---
--- design blocking chan that uses IORef on write end
---    read_end <- readForCAS readVar
---    loop $ modifyMaybeFollow read_end
---    -- here or in modifyMaybeFollow CAS readVar
---    where modifyMaybeFollowOp (Cons a next) = (return a, DeadCons next)
---                              (DeadCons next) = (follow next, DeadCons next) ... or something....
---
---    ...or use IORefs but have a 
---    data List a = ... | Nil Bool MVar -- where Bool says "blocking" or not
---    when filled it is simply `readMVar`-ed to get to next element.
---        ...then we just need to figure out how to keep using it for blocking after it gets filled...
 --
 -- think carefully about re-ordering potential
 --   data dependencies help?
 --   think about multiple *operations* inlined entailing some re-ordering
---
--- see if you can replace any with atomicModifyIORefCAS
 --
 -- ultimately choose the partial chan that has the best performance with 1w1r
 --
@@ -58,6 +36,22 @@ import Data.IORef
 --   especially pay attention to what happens when a reader blocks (because a thread descheduled) and subsequent reader completes
 
 
+-- Performance TODO:
+-- compare with Chan; why the bigger hit from write-all-read-all?
+-- do some profiling and look at core for allocations
+-- consider an optimization that on read compares head and tail MVars for
+--   equality and busy waits for a time before possibly blocking
+
+-- NOTES:
+--   readArray         = 8.7ns   (OK. this pair is ~ 2ns slower than IORef)
+--   writeMutableArray = 4.58ns
+--   mutableArrayCASMod = 15.93ns (GOOD! Faster than atomicModifyIORef)
+--
+--   readIORef = 3.74ns
+--   writeIORef = 7.33ns
+--   atomicModifyIORef' = 23.05ns
+--
+--   TODO: compare arrays in 7.8
 
 newSplitChan :: IO (InChan a, OutChan a)
 {-# INLINABLE newSplitChan #-}
@@ -69,9 +63,12 @@ newSplitChan = do
 
 writeChan :: InChan a -> a -> IO ()
 {-# INLINABLE writeChan #-}
-writeChan (InChan writeVar) a = do
+writeChan (InChan writeVar) = \a-> do
   new_hole <- newEmptyMVar
   mask_ $ do
+      -- NOTE: as long as this is some atomic operation, and the rest of our
+      --       code remains free of fragile lockfree logic, I think we should
+      --       be immune to re-ordering concerns.
       -- other writers can go
       old_hole <- atomicModifyIORef' writeVar ((,) new_hole)
       -- first reader can go
@@ -79,6 +76,8 @@ writeChan (InChan writeVar) a = do
 
 
 -- INVARIANT: readChan never breaks spine of queue
+--     this should be very immune to re-ordering; anything that we put into
+--     readVar is still correct
 
 readChan :: OutChan a -> IO a
 {-# INLINABLE readChan #-}
