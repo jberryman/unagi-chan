@@ -37,10 +37,8 @@ import Data.IORef
 
 
 -- Performance TODO:
--- compare with Chan; why the bigger hit from write-all-read-all?
--- do some profiling and look at core for allocations
--- consider an optimization that on read compares head and tail MVars for
---   equality and busy waits for a time before possibly blocking
+--   compare with Chan; why the bigger hit from write-all-read-all?
+--   do some profiling and look at core for allocations
 
 -- NOTES:
 --   readArray         = 8.7ns   (OK. this pair is ~ 2ns slower than IORef)
@@ -53,6 +51,18 @@ import Data.IORef
 --
 --   TODO: compare arrays in 7.8
 
+-- PROFILING
+--   - TODO the simple read-some-write-some example would be better for looking at core
+--   - space profile WITH inlines in
+--      - mostly Cons's and MVars
+--          - maybe IORef is smaller heap size?
+--          - maybe there is an unboxed MVar somewhere?
+--   - time profile and look at core without
+--
+--   - what about the space of MVar vs IORef?
+--     - maybe use ReplaceAbleLock a = IORef (MVar a) -- with IORef spine version
+--   - can we get an unboxed MVar (maybe roll by hand?)
+
 newSplitChan :: IO (InChan a, OutChan a)
 {-# INLINABLE newSplitChan #-}
 newSplitChan = do
@@ -61,18 +71,19 @@ newSplitChan = do
    writeVar <- newIORef hole
    return (InChan writeVar, OutChan readVar)
 
+
 writeChan :: InChan a -> a -> IO ()
 {-# INLINABLE writeChan #-}
 writeChan (InChan writeVar) = \a-> do
-  new_hole <- newEmptyMVar
+  newHole <- newEmptyMVar
   mask_ $ do
       -- NOTE: as long as this is some atomic operation, and the rest of our
       --       code remains free of fragile lockfree logic, I think we should
       --       be immune to re-ordering concerns.
       -- other writers can go
-      old_hole <- atomicModifyIORef' writeVar ((,) new_hole)
+      oldHole <- atomicModifyIORef' writeVar ((,) newHole)
       -- first reader can go
-      putMVar old_hole (Cons a new_hole)
+      putMVar oldHole (Cons (Just a) newHole)
 
 
 -- INVARIANT: readChan never breaks spine of queue
@@ -82,24 +93,20 @@ writeChan (InChan writeVar) = \a-> do
 readChan :: OutChan a -> IO a
 {-# INLINABLE readChan #-}
 readChan (OutChan readVar) = readIORef readVar >>= mask_ . follow 
-  where follow read_end = do
-          cns <- takeMVar read_end
-          case cns of
-            ConsEmpty new_read_end -> do
-                putMVar read_end cns
-                follow new_read_end
-            Cons a new_read_end -> do 
+  where follow end = do
+          cns@(Cons ma newEnd) <- takeMVar end
+          case ma of
+            Nothing -> do
+                putMVar end cns
+                follow newEnd
+            Just a -> do 
                 -- NOTE: because this never breaks the spine we can use
                 -- writeIORef here even if another reader races ahead of us at
-                -- this point; in which case new_read_end will hold a ConsEmpty
-                putMVar read_end (ConsEmpty new_read_end)    -- TODO
-                writeIORef readVar new_read_end              -- TODO which order to place these? 
+                -- this point; in which case newEnd will hold a ConsEmpty
+                putMVar end $ Cons Nothing newEnd -- \
+                writeIORef readVar newEnd         -- / reorderable
                 return a
-{-
-  modifyMVarMasked readVar $ \read_end -> do -- Note [modifyMVarMasked]
-    (Cons a new_read_end) <- takeMVar read_end
-    return (new_read_end, a)
--}
+
 
 -- | Return a lazy list representing the contents of the supplied OutChan, much
 -- like System.IO.hGetContents.

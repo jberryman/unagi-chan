@@ -3,7 +3,7 @@
 module Control.Concurrent.Chan.Split.Internal (
    -- | Unsafe implementation details. This interface will not be stable across
    -- versions.
-   Cons(..), InChan(..), OutChan(..)
+   Stream, Cons(..), InChan(..), OutChan(..)
    ) where
 
 import Data.Typeable(Typeable)
@@ -15,8 +15,7 @@ import Data.IORef
 --   replace nested MVars with top-level lock + unboxed MVar
 
 type Stream a = MVar (Cons a)
-data Cons a = Cons a !(Stream a)
-            | ConsEmpty !(Stream a)
+data Cons a = Cons (Maybe a) !(Stream a)
 
 -- | The \"write side\" of a chan pair
 newtype InChan i = InChan (IORef (Stream i)) -- Invariant: Stream i always empty MVar
