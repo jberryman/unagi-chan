@@ -24,6 +24,7 @@ library
                      , Control.Concurrent.Chan.Split.Internal
 
   ghc-options:        -Wall
+  ghc-prof-options:   -fprof-auto
 
   build-depends:       base
                      , atomic-primops==0.6
@@ -53,11 +54,12 @@ executable dev-example
   ghc-options: -O2  -rtsopts  
   
   -- Either do threaded for eventlogging and simple timing...
-  ghc-options: -threaded -with-rtsopts=-N2
-  ghc-options: -eventlog
+  --ghc-options: -threaded -with-rtsopts=-N2
+  --ghc-options: -eventlog
   -- ...or do non-threaded runtime
-  --ghc-options: -prof -fprof-auto
+  ghc-prof-options: -fprof-auto
   --Relevant profiling RTS settings:  -xt
+  -- TODO also check out +RTS -A10m, and look at output of -sstderr
 
   hs-source-dirs: core-example, ./
   main-is: Main.hs

@@ -15,7 +15,7 @@ import Debug.Trace
 -- This is a copy of the "async 100 writers 100 readers" from chan-benchmarks
 main = do 
     (nm:other) <- getArgs
-    let n = 100000 
+    let n = 1000000
         (r,w) = case other of
                      [rS,wS] -> (read rS, read wS)
                      _       -> (100,100)
