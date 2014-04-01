@@ -31,7 +31,7 @@ rEADS_FOR_SEGMENT_CREATE_WAIT = 20
 -- expose for debugging correct behavior with overflow:
 sTARTING_CELL_OFFSET :: Int
 sTARTING_CELL_OFFSET = minBound
-
+-- TODO or consider making newChanInternal here take above as param (for testing)
 
 -- TRANSITIONS::
 --   During Read:
@@ -51,8 +51,7 @@ data Cell a = Empty | Written a | Blocking (MVar a) | BlockedAborted
 --       hurts performance?
 
 data Stream a = 
-           -- the offset into the stream of this segment; the reader/writer
-           -- receiving a counter value of offset operates on segment[0] 
+           -- the offset into the stream of this StreamSegment[0]
     Stream !Int 
            (!StreamSegment a)
            -- The next segment in the stream; new segments are allocated and
@@ -61,45 +60,50 @@ data Stream a =
            (!IORef (NextSegment a))
 
 data NextSegment a = NoSegment | Next !(Stream a) -- TODO or Maybe? Does unboxing strict matter here?
-nullSegment :: NextSegment a -> Bool
-nullSegment NoSegment = True
-nullSegment _ = False
 
--- TODO RENAME ChanEnd
-data InChan a = 
+-- InChan & OutChan are identical, sharing a stream, but with independent
+-- counters
+data ChanEnd a = 
            -- an efficient producer of segments of length sEGMENT_LENGTH:
-    InChan (!IO (StreamSegment a))
-           -- Must start at same value of 
+    ChanEnd (!IO (StreamSegment a))
+           -- Both Chan ends must start with the same counter value.
            -- TODO maybe need a "generation" counter in case of crazy delayed thread (possible?)
            !AtomicCounter 
            -- the stream head; this must never point to a segment whose offset
            -- is greater than the counter value
            (!IORef (Stream a))
 
--- TODO make these Chan, with newtype wrappers.
-data OutChan a = OutChan AtomicCounter
+newtype InChan a = InChan (ChanEnd a)
+newtype OutChan a = OutChan (ChanEnd a)
 
 
 newSplitChan :: IO (InChan a, OutChan a)
 {-# INLINABLE newSplitChan #-}
 newSplitChan = do
     segSource <- newSegmentSource
-    InChan segSource
+    let firstCount = sTARTING_CELL_OFFSET - 1
+    cntrR <- newCounter firstCount
+    cntrW <- newCounter firstCount
+    streamSeg0 <- segSource
+    next <- newIORef NoSegment
+    let stream = Stream sTARTING_CELL_OFFSET streamSeg0 next
+    streamHead <- newIORef stream 
+    let end cntr = ChanEnd segSource cntr streamHead
+    return (InChan $ end cntrW, OutChan $ end cntrR)
 
 writeChan :: InChan a -> a -> IO ()
 {-# INLINABLE writeChan #-}
-writeChan c@(InChan segSource counter streamHead) a = mask_ $ do
+writeChan c@(InChan ce@(ChanEnd segSource counter streamHead)) a = mask_ $ do
+    (segIx, str@(Stream _ segment _)) <- moveToNextCell ce
  -- NOTE: at this point we have an obligation to the reader of the assigned
  -- cell and what follows must have async exceptions masked:
-    (segIx, str@(Stream offset segment next)) <- moveToNextCell c
     maybeWroteFirst <- writeCell segment segIx a
     case maybeWroteFirst of 
          -- retry if cell reader is seen to have been killed:
          Nothing -> writeChan c a  -- NOTE [1]
          -- maybe optimistically try to set up next segment.
          Just wroteFirst -> when (segIx == 0 && wroteFirst) $ -- NOTE [2]
-            --  TODO make sure this handles case where already set up
-            void $ waitingAdvanceStream next offset segSource 0
+                              advanceStream str segSource
   -- [2] the writer or reader which arrives first to the first cell of a new
   -- segment is tasked (somewhat arbitrarily) with trying to pre-allocate the
   -- *next* segment hopefully ahead of any readers or writers who might need
@@ -112,8 +116,8 @@ writeChan c@(InChan segSource counter streamHead) a = mask_ $ do
 
 readChan :: OutChan a -> IO a
 {-# INLINABLE readChan #-}
-readChan c@(InChan segSource counter streamHead) = mask_ $ do  -- NOTE [1]
-    (segIx, str@(Stream offset segment next)) <- moveToNextCell c
+readChan (OutChan ce@(ChanEnd segSource _ _)) = mask_ $ do  -- NOTE [1]
+    (segIx, str@(Stream _ segment _)) <- moveToNextCell ce
     futureA <- readCell segment segIx
     case futureA of
          Left a -> return a
@@ -121,8 +125,7 @@ readChan c@(InChan segSource counter streamHead) = mask_ $ do  -- NOTE [1]
            -- if we're the first of the segment and about to do a blocking read
            -- (i.e.  we beat writer to cell 0) then we optimistically set up
            -- the next segment first, then perform that blocking read:
-           when (segIx == 0) $ 
-             waitingAdvanceStream next offset segSource 0
+           when (segIx == 0) $ advanceStream str segSource
            blockingReturn_a
   -- [1] we want our queue to behave like Chan in that (reasoning in terms of
   -- linearizability) the first reader waiting in line for an element may lose
@@ -132,18 +135,23 @@ readChan c@(InChan segSource counter streamHead) = mask_ $ do  -- NOTE [1]
   -- result in a lost message.  To that end we mask this, and on exception while
   -- blocking we write `BlockedAborted`, signaling writer to retry.
 
+{-# INLINE advanceStream #-}
+advanceStream (Stream offset _ next) segSource = void $
+    waitingAdvanceStream next offset segSource 0
 
 
-moveToNextCell :: Chan a -> (Int, Stream a)
+-- increments counter, finds stream segment of corresponding cell (updating the
+-- stream head pointer as needed), and returns the stream segment and relative
+-- index of our cell.
+moveToNextCell :: ChanEnd a -> (Int, Stream a)
 {-# INLINE moveToNextCell #-}
-moveToNextCell (InChan segSource counter streamHead) = do
+moveToNextCell (ChanEnd segSource counter streamHead) = do
     str0@(Stream offset0 _ _) <- readIORef streamHead
     -- !!! TODO BARRIER MAYBE REQUIRED !!!
     ix <- incrCounter 1 counter
-
-    let go str@(Stream offset _ next) = do
-            let !segIx = ix - offset
-            assert (segIx >= 0) $ -- else cell is unreachable!
+    let go str@(Stream offset _ next) =
+          let !segIx = ix - offset
+           in assert (segIx >= 0) $ -- else cell is unreachable!
               if segIx < sEGMENT_LENGTH
                 -- assigned cell is within this segment
                 then do 
@@ -163,9 +171,10 @@ moveToNextCell (InChan segSource counter streamHead) = do
   -- *backwards* if the thread was descheduled, but that's not a correctness
   -- issue. TODO check we're not moving the head pointer backwards; maybe need a generation counter + handle overflow correctly.
 
-
--- TODO tighten this up: utility function for read_cas/case/cas (maybe
---      polymorphic, maybe using LambdaCase)?
+-- thread-safely try to fill `nextSegRef` at the `nextOffset` with a new
+-- segment, waiting some number of iterations (for other threads to handle it).
+-- Returns nextSegRef's StreamSegment.
+--
 {-# INLINE waitingAdvanceStream #-}
 waitingAdvanceStream nextSegRef prevOffset segSource = go where
   go !wait = assert (wait >= 0) $ do
@@ -264,4 +273,6 @@ readCell arr ix = do
      - next segment not pre-allocated
      - etc...
  - test with initial counter position at almost-rollover to test that.
+ - single-threaded W/R/W/R... and WWW... RRR... over overflow barrier
+ - make sure that first write after chan creation goes into [0] and that specified initial offset was correct.
  -}
