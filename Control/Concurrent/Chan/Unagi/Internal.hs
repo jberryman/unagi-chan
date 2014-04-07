@@ -1,39 +1,58 @@
+{-# LANGUAGE BangPatterns #-}
 module Control.Concurrent.Chan.Unagi.Internal
     where
 
 -- Internals exposed for testing.
 import Control.Concurrent.MVar
 import Data.IORef
-import Control.Exception(evaluate,mask_,assert)
+import Control.Exception(evaluate,mask_,assert,onException)
 
-import Control.Monad.Primitive(PrimState)
+import Control.Monad.Primitive(PrimState, RealWorld)
 import Data.Atomics.Counter
 import Data.Atomics
 import qualified Data.Primitive as P
 
+import Control.Monad
 import Control.Applicative
 
 
-type StreamSegment a = P.MutableArray RealWorld (Cell a)
+-- TODO WRT GARBAGE COLLECTION
+--  This can lead to large amounts of memory use in theory:
+--   1. overhead of pre-allocated arrays and template
+--   2. already-read elements in arrays not-yet GC'd
+--   3. array and element overhead from a writer/reader delayed (many intermediate chunks)
+-- Ideas:
+--   - StablePtr can be freed manually. Does it allow array to be freed too?
+--      but see: https://ghc.haskell.org/trac/ghc/ticket/7670
+--   - does a single-constructor occurrence point to the same bit of memory?
+--      (i.e. no element overhead for writing `Empty` or something?)
+--   - hold weak reference to previous segment, and when we move the head
+--     pointer, update `next` to point to this new segment (if it is still
+--     around?)
 
--- Constant for now: back-of-envelope considerations:
---   - making most of constant factor for cloning array of *any* size
---   - make most of overheads of moving to the next segment, etc.
---   - provide enough runway for creating next segment when 32 simultaneous writers 
-sEGMENT_LENGTH :: Int
-sEGMENT_LENGTH = 64
 
 -- approx time_to_create_new_segment / time_for_read_IOref, + some margin. See
 -- usage site.
 rEADS_FOR_SEGMENT_CREATE_WAIT :: Int
 rEADS_FOR_SEGMENT_CREATE_WAIT = 20
 
--- expose for debugging correct behavior with overflow:
-sTARTING_CELL_OFFSET :: Int
-sTARTING_CELL_OFFSET = minBound
--- TODO or consider making newChanInternal here take above as param (for testing)
+newtype InChan a = InChan (ChanEnd a)
+newtype OutChan a = OutChan (ChanEnd a)
 
--- TRANSITIONS::
+-- InChan & OutChan are identical, sharing a stream, but with independent
+-- counters
+data ChanEnd a = 
+           -- an efficient producer of segments of length sEGMENT_LENGTH:
+    ChanEnd !(IO (StreamSegment a))
+            -- Both Chan ends must start with the same counter value.
+            -- TODO maybe need a "generation" counter in case of crazy delayed thread (possible?)
+            !AtomicCounter 
+            -- the stream head; this must never point to a segment whose offset
+            -- is greater than the counter value
+            !(IORef (Stream a))
+
+type StreamSegment a = P.MutableArray RealWorld (Cell a)
+-- TRANSITIONS:
 --   During Read:
 --     Empty   -> Blocking  (-> BlockedAborted)
 --     Written
@@ -43,50 +62,39 @@ sTARTING_CELL_OFFSET = minBound
 --     BlockedAborted
 data Cell a = Empty | Written a | Blocking (MVar a) | BlockedAborted
 
+-- Constant for now: back-of-envelope considerations:
+--   - making most of constant factor for cloning array of *any* size
+--   - make most of overheads of moving to the next segment, etc.
+--   - provide enough runway for creating next segment when 32 simultaneous writers 
+sEGMENT_LENGTH :: Int
+sEGMENT_LENGTH = 64
 -- NOTE In general we'll have two segments allocated at any given time in
 -- addition to the segment template, so in the worst case, when the program
 -- exits we will have allocated ~ 3 segments extra memory than was actually
 -- required.
--- TODO: any way to manually tell the GC we don't need a cell? Benefits or
---       hurts performance?
 
 data Stream a = 
            -- the offset into the stream of this StreamSegment[0]
     Stream !Int 
-           (!StreamSegment a)
+           !(StreamSegment a)
            -- The next segment in the stream; new segments are allocated and
            -- put here as we go, with threads cooperating to allocate new
            -- segments:
-           (!IORef (NextSegment a))
+           !(IORef (NextSegment a))
 
 data NextSegment a = NoSegment | Next !(Stream a) -- TODO or Maybe? Does unboxing strict matter here?
 
--- InChan & OutChan are identical, sharing a stream, but with independent
--- counters
-data ChanEnd a = 
-           -- an efficient producer of segments of length sEGMENT_LENGTH:
-    ChanEnd (!IO (StreamSegment a))
-           -- Both Chan ends must start with the same counter value.
-           -- TODO maybe need a "generation" counter in case of crazy delayed thread (possible?)
-           !AtomicCounter 
-           -- the stream head; this must never point to a segment whose offset
-           -- is greater than the counter value
-           (!IORef (Stream a))
-
-newtype InChan a = InChan (ChanEnd a)
-newtype OutChan a = OutChan (ChanEnd a)
-
-
-newSplitChan :: IO (InChan a, OutChan a)
-{-# INLINABLE newSplitChan #-}
-newSplitChan = do
+-- expose `startingCellOffset` for debugging correct behavior with overflow:
+newChanStarting :: Int -> IO (InChan a, OutChan a)
+{-# INLINE newChanStarting #-}
+newChanStarting startingCellOffset = do
+    let firstCount = startingCellOffset - 1
     segSource <- newSegmentSource
-    let firstCount = sTARTING_CELL_OFFSET - 1
     cntrR <- newCounter firstCount
     cntrW <- newCounter firstCount
     streamSeg0 <- segSource
     next <- newIORef NoSegment
-    let stream = Stream sTARTING_CELL_OFFSET streamSeg0 next
+    let stream = Stream startingCellOffset streamSeg0 next
     streamHead <- newIORef stream 
     let end cntr = ChanEnd segSource cntr streamHead
     return (InChan $ end cntrW, OutChan $ end cntrR)
@@ -135,15 +143,11 @@ readChan (OutChan ce@(ChanEnd segSource _ _)) = mask_ $ do  -- NOTE [1]
   -- result in a lost message.  To that end we mask this, and on exception while
   -- blocking we write `BlockedAborted`, signaling writer to retry.
 
-{-# INLINE advanceStream #-}
-advanceStream (Stream offset _ next) segSource = void $
-    waitingAdvanceStream next offset segSource 0
-
 
 -- increments counter, finds stream segment of corresponding cell (updating the
 -- stream head pointer as needed), and returns the stream segment and relative
 -- index of our cell.
-moveToNextCell :: ChanEnd a -> (Int, Stream a)
+moveToNextCell :: ChanEnd a -> IO (Int, Stream a)
 {-# INLINE moveToNextCell #-}
 moveToNextCell (ChanEnd segSource counter streamHead) = do
     str0@(Stream offset0 _ _) <- readIORef streamHead
@@ -171,6 +175,11 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
   -- *backwards* if the thread was descheduled, but that's not a correctness
   -- issue. TODO check we're not moving the head pointer backwards; maybe need a generation counter + handle overflow correctly.
 
+
+{-# INLINE advanceStream #-}
+advanceStream (Stream offset _ next) segSource = void $
+    waitingAdvanceStream next offset segSource (0::Int)
+
 -- thread-safely try to fill `nextSegRef` at the `nextOffset` with a new
 -- segment, waiting some number of iterations (for other threads to handle it).
 -- Returns nextSegRef's StreamSegment.
@@ -190,9 +199,9 @@ waitingAdvanceStream nextSegRef prevOffset segSource = go where
                -- that may have failed (meaning another thread took care of
                -- it); regardless next segment must now be there:
                case peekTicket tkDone of
-                 NextSegment strNext -> return strNext
-                 _ -> error "Impossible! This should only have been NextSegment"
-         NextSegment strNext -> return strNext
+                 Next strNext -> return strNext
+                 _ -> error "Impossible! This should only have been Next segment"
+         Next strNext -> return strNext
 
 
 -- copying a template array with cloneMutableArray is much faster than creating
@@ -201,8 +210,8 @@ waitingAdvanceStream nextSegRef prevOffset segSource = go where
 newSegmentSource :: IO (IO (StreamSegment a))
 {-# INLINE newSegmentSource #-}
 newSegmentSource = do
-    arr <- newArray sEGMENT_LENGTH Empty
-    return (cloneMutableArray arr 0 sEGMENT_LENGTH)
+    arr <- P.newArray sEGMENT_LENGTH Empty
+    return (P.cloneMutableArray arr 0 sEGMENT_LENGTH)
 
 
 -- ----------
@@ -226,7 +235,7 @@ writeCell :: StreamSegment a -> Int -> a -> IO (Maybe Bool)
 writeCell arr ix a = do
     cellTkt <- readArrayElem arr ix
     case peekTicket cellTkt of
-         Empty -> do (success,cellTkt') <- casArrayElem arr ix cellTkt a
+         Empty -> do (success,cellTkt') <- casArrayElem arr ix cellTkt (Written a)
                      if success 
                          then return (Just True)
                          else handleNotEmpty (peekTicket cellTkt')
@@ -237,7 +246,22 @@ writeCell arr ix a = do
         -- this might be observed to differ from the semantics of Chan. Retry:
         handleNotEmpty BlockedAborted = return Nothing
         handleNotEmpty _ 
-            = error "Impossible! Expected Blocking or BlockedAborted"
+            -- Theoretical race condition: Writer reads head, then descheduled.
+            -- Millions of segments are allocated and counter incremented but
+            -- none manage to move the head pointer. When the counter comes
+            -- back around, the next writer assigned this count will write to
+            -- the cell we've been assigned and this error will be raised.
+            = error "Nearly Impossible! Expected Blocking or BlockedAborted"
+        -- TODO A WORSE CASE: another descheduled thread from this same block
+        --      completes, moving the pointer way backwards.
+        -- HOW TO SOLVE?
+        --     We want to move the pointer forward only
+        --      - could use "generations"
+        --         - would we have to deal with this anywhere else?
+        --         - if not, then probably worth it.
+        --      - use heuristic, or just only move if within some forward window
+        --         maybe just subtract and only move if positive, then do?
+
 
 -- ...and likewise for the reader. Each index of each segment has at most one
 -- reader and one writer assigned by the atomic counters. We return either the
@@ -257,7 +281,7 @@ readCell arr ix = do
                 then Right (takeMVar v `onException` (
                        -- re. writeArray race condition: if read overlaps with
                        -- write, this is undefined behavior anyway:
-                       writeArray arr ix BlockedAborted ) )
+                       P.writeArray arr ix BlockedAborted ) )
                 -- In the meantime a writer has written. Good!
                 else case peekTicket elseWrittenCell of
                           Written a -> Left a
