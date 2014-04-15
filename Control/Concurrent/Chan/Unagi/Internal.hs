@@ -5,9 +5,9 @@ module Control.Concurrent.Chan.Unagi.Internal
 -- Internals exposed for testing.
 import Control.Concurrent.MVar
 import Data.IORef
-import Control.Exception(evaluate,mask_,assert,onException)
+import Control.Exception(mask_,assert,onException)
 
-import Control.Monad.Primitive(PrimState, RealWorld)
+import Control.Monad.Primitive(RealWorld)
 import Data.Atomics.Counter
 import Data.Atomics
 import qualified Data.Primitive as P
@@ -15,6 +15,7 @@ import qualified Data.Primitive as P
 import Control.Monad
 import Control.Applicative
 
+import Debug.Trace
 
 -- TODO WRT GARBAGE COLLECTION
 --  This can lead to large amounts of memory use in theory:
@@ -38,12 +39,14 @@ rEADS_FOR_SEGMENT_CREATE_WAIT = 20
 
 newtype InChan a = InChan (ChanEnd a)
 newtype OutChan a = OutChan (ChanEnd a)
+-- TODO derive Eq & Typeable
+
 
 -- InChan & OutChan are identical, sharing a stream, but with independent
 -- counters
 data ChanEnd a = 
            -- an efficient producer of segments of length sEGMENT_LENGTH:
-    ChanEnd !(IO (StreamSegment a))
+    ChanEnd !(SegSource a)
             -- Both Chan ends must start with the same counter value.
             -- TODO maybe need a "generation" counter in case of crazy delayed thread (possible?)
             !AtomicCounter 
@@ -84,24 +87,19 @@ data Stream a =
 
 data NextSegment a = NoSegment | Next !(Stream a) -- TODO or Maybe? Does unboxing strict matter here?
 
--- expose `startingCellOffset` for debugging correct behavior with overflow:
+-- we expose `startingCellOffset` for debugging correct behavior with overflow:
 newChanStarting :: Int -> IO (InChan a, OutChan a)
 {-# INLINE newChanStarting #-}
 newChanStarting startingCellOffset = do
     let firstCount = startingCellOffset - 1
     segSource <- newSegmentSource
-    cntrR <- newCounter firstCount
-    cntrW <- newCounter firstCount
-    streamSeg0 <- segSource
-    next <- newIORef NoSegment
-    let stream = Stream startingCellOffset streamSeg0 next
-    streamHead <- newIORef stream 
-    let end cntr = ChanEnd segSource cntr streamHead
-    return (InChan $ end cntrW, OutChan $ end cntrR)
+    stream <- Stream startingCellOffset <$> segSource <*> newIORef NoSegment
+    let end = ChanEnd segSource <$> newCounter firstCount <*> newIORef stream
+    liftA2 (,) (InChan <$> end) (OutChan <$> end)
 
 writeChan :: InChan a -> a -> IO ()
 {-# INLINABLE writeChan #-}
-writeChan c@(InChan ce@(ChanEnd segSource counter streamHead)) a = mask_ $ do
+writeChan c@(InChan ce@(ChanEnd segSource _ _)) a = mask_ $ do
     (segIx, str@(Stream _ segment _)) <- moveToNextCell ce
  -- NOTE: at this point we have an obligation to the reader of the assigned
  -- cell and what follows must have async exceptions masked:
@@ -176,6 +174,7 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
   -- issue. TODO check we're not moving the head pointer backwards; maybe need a generation counter + handle overflow correctly.
 
 
+advanceStream :: Stream a -> SegSource a -> IO ()
 {-# INLINE advanceStream #-}
 advanceStream (Stream offset _ next) segSource = void $
     waitingAdvanceStream next offset segSource (0::Int)
@@ -184,6 +183,8 @@ advanceStream (Stream offset _ next) segSource = void $
 -- segment, waiting some number of iterations (for other threads to handle it).
 -- Returns nextSegRef's StreamSegment.
 --
+waitingAdvanceStream :: IORef (NextSegment a) -> Int -> SegSource a 
+                     -> Int -> IO (Stream a)
 {-# INLINE waitingAdvanceStream #-}
 waitingAdvanceStream nextSegRef prevOffset segSource = go where
   go !wait = assert (wait >= 0) $ do
@@ -202,12 +203,15 @@ waitingAdvanceStream nextSegRef prevOffset segSource = go where
                  Next strNext -> return strNext
                  _ -> error "Impossible! This should only have been Next segment"
          Next strNext -> return strNext
+  -- TODO clean up and need some tests / assertions
 
 
 -- copying a template array with cloneMutableArray is much faster than creating
 -- a new one; in fact it seems we need this in order to scale, since as cores
 -- increase we don't have enough "runway" and can't allocate fast enough:
-newSegmentSource :: IO (IO (StreamSegment a))
+type SegSource a = IO (StreamSegment a)
+
+newSegmentSource :: IO (SegSource a)
 {-# INLINE newSegmentSource #-}
 newSegmentSource = do
     arr <- P.newArray sEGMENT_LENGTH Empty
@@ -299,4 +303,7 @@ readCell arr ix = do
  - test with initial counter position at almost-rollover to test that.
  - single-threaded W/R/W/R... and WWW... RRR... over overflow barrier
  - make sure that first write after chan creation goes into [0] and that specified initial offset was correct.
+ - Make sure we never get False returned on casIORef where we no no conflicts, i.e. no false negatives
+     - also include arbitrary delays between readForCAS and the CAS
+ - (Not a test, but...) add a brunch with a whole load of event logging that we can analyze (maybe in an automated test!)
  -}

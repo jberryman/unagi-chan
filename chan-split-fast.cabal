@@ -19,15 +19,21 @@ flag dev
   default: False
   manual: True
 
+-- TODO in tests, compile with optimizations, but add -f-no-ignore-asserts
+
 library
   exposed-modules:     Control.Concurrent.Chan.Split
                      , Control.Concurrent.Chan.Split.Internal
+                     , Control.Concurrent.Chan.Unagi
+
+  other-modules:       Control.Concurrent.Chan.Unagi.Internal
 
   ghc-options:        -Wall
   ghc-prof-options:   -fprof-auto
 
   build-depends:       base
-                     , atomic-primops==0.6
+                     , atomic-primops==0.6.0.5
+                     , primitive>=0.5.3
   default-language:    Haskell2010
 
 test-suite test
@@ -41,7 +47,8 @@ test-suite test
   main-is: Main.hs
 
   build-depends:       base
-                     , atomic-primops==0.6
+                     , atomic-primops==0.6.0.5
+                     , primitive>=0.5.3
   default-language:    Haskell2010
 
 -- for profiling, checking out core, etc
@@ -65,6 +72,7 @@ executable dev-example
   main-is: Main.hs
   build-depends:       base
                      , stm
-                     , atomic-primops==0.6
+                     , atomic-primops==0.6.0.5
+                     , primitive>=0.5.3
   default-language:    Haskell2010
 
