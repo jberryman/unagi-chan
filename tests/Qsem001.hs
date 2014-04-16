@@ -2,7 +2,8 @@ module Qsem001 where
 
 import Control.Concurrent.QSem as OldQ
 
-import Control.Concurrent.Chan.Split
+import Control.Concurrent.Chan.Unagi
+-- import Control.Concurrent.Chan.Split
 import Control.Concurrent (forkIO, threadDelay, killThread, yield)
 import Control.Concurrent.MVar
 import Control.Exception
@@ -41,7 +42,7 @@ tests = [
 
 sem_fifo :: Assertion
 sem_fifo = do
-  (i,o) <- newSplitChan
+  (i,o) <- newChan
   q <- new 0
   t1 <- forkIO $ do wait q; writeChan i 'a'
   threadDelay 10000

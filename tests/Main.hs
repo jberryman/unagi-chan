@@ -11,12 +11,18 @@ import Smoke
 
 main = do 
     hSetBuffering stdout NoBuffering
-    testContention 200 200 100000
+    testContention 2 2 1000000
     -- QSem tests:
     defaultMainQSem
-    -- "check for deadlocks":
-    let tries = 100
+    -- check for deadlocks:
+    let tries = 10000 -- takes a few minutes, but a smaller number seems insufficient
     putStrLn $ "Checking for deadlocks from killed reader, x"++show tries
     mainChan002 tries
     putStrLn $ "Checking for deadlocks from killed writer, x"++show tries
     mainChan003 tries
+
+-- TODO deadlock tests:
+--        - use async + thread delay to determine when to start throwing kill, and to save time
+--        - make sure they are effective on a 2-core machine, otherwise emit Warning!
+--        - maybe combine the tests, removing Chan003
+--        - in Chan002, also do a final write and then a read to make sure not broken.

@@ -2,7 +2,8 @@ module Chan001 where
 
 import Debug.QuickCheck
 import System.IO.Unsafe
-import Control.Concurrent.Chan.Split
+--import Control.Concurrent.Chan.Split
+import Control.Concurrent.Chan.Unagi
 import Control.Concurrent
 import Control.Monad
 

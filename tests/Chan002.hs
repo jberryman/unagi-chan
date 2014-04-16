@@ -1,7 +1,8 @@
 module Chan002 where
 
 import Control.Concurrent
-import qualified Control.Concurrent.Chan.Split as S
+-- import qualified Control.Concurrent.Chan.Split as S
+import qualified Control.Concurrent.Chan.Unagi as S
 import Control.Exception
 import Control.Monad
 import System.IO
@@ -10,7 +11,7 @@ import System.Environment
 -- test for deadlocks
 mainChan002 n = do
   replicateM_ n $ do
-         (i,o) <- S.newSplitChan
+         (i,o) <- S.newChan
          wid <- forkIO $ forever $ S.writeChan i (5::Int)
          rid <- forkIO $ forever $ void $ S.readChan o
          threadDelay 1000
@@ -18,3 +19,4 @@ mainChan002 n = do
          putStr "."
          S.readChan o
          throwTo wid ThreadKilled
+  putStrLn ""
