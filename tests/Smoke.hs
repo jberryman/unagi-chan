@@ -30,21 +30,15 @@ testContention writers readers n = do
   ns <- replicateM nNice (C.readChan out)
   isEmpty <- C.isEmptyChan out
   if sort ns == [1..nNice] && isEmpty
-      -- then putStrLn $ "Success!"
-      -- TODO this is too slow for now:
-      then let disorder = kendTau $ take 10000 ns
-            in if disorder < 0.2
-                 then putStrLn $ "Not enough disorder in samples: "++(show $ disorder)++". Please try again or report a bug"
-                 else putStrLn $ "Success, with disorder sample of "++(show $ disorder)++" (closer to 1 means we have higher confidence in the test)."
+      then let d = interleaving ns
+            in if d < 0.75
+                 then putStrLn $ "Not enough interleaving of threads: "++(show $ d)++". Please try again or report a bug"
+                 else putStrLn $ "Success, with interleaving pct of "++(show $ d)++" (closer to 1 means we have higher confidence in the test)."
       else error "What we put in isn't what we got out :("
 
--- TODO more efficient algorithm
---      more appropriate measure of disorder or different payloads
--- normalized kendall tau distance against the ordered list. Stupid measure of
--- what we mean by disorder, given how we've defined `groups` above:
-kendTau :: Ord a=> [a] -> Float
-kendTau ns = fromIntegral (kt ns) / pairsTot where
-    kt [] = 0
-    kt (a:as) = (length $ filter (<a) as) + kt as
-    size = fromIntegral $ length ns
-    pairsTot = (size * (size - 1) / 2)
+
+interleaving :: (Num a, Eq a) => [a] -> Float
+interleaving [] = 0
+interleaving (x:xs) =  (snd $ foldl' countNonIncr (x,0) xs) / l
+  where l = fromIntegral $ length xs
+        countNonIncr (x0,!cnt) x1 = (x1, if x1 == x0+1 then cnt else cnt+1)
