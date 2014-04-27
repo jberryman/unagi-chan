@@ -14,7 +14,7 @@ checkDeadlocksWriter n = do
          (i,o) <- S.newChan
          wStart <- newEmptyMVar
          wid <- forkIO (putMVar wStart () >> ( forever $ S.writeChan i (0::Int)) )
-         -- TODO wait for writer to start, then...
+         -- wait for writer to start
          takeMVar wStart >> threadDelay 1
          throwTo wid ThreadKilled
          -- did killing the writer damage queue for writes or reads?

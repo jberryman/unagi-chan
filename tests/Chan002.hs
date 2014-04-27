@@ -1,43 +1,65 @@
 module Chan002 where
 
 import Control.Concurrent
--- import qualified Control.Concurrent.Chan.Split as S
-import qualified Control.Concurrent.Chan.Unagi as S
+import qualified Control.Concurrent.Chan.Unagi as U
+import qualified Control.Concurrent.Chan.Unagi.Internal as UI
 import Control.Exception
 import Control.Monad
 import System.IO
 import System.Environment
+import Data.Atomics.Counter
 
--- TODO a variation that kills a blocked reader.
+-- TODO This has gotten pretty unagi-specific. probably need a new generic one when we add other chans?
+--       - then we could add a simpler generic test that runs forever reader AND writer threads
+--          but still check numCapabilities and warn if < 4
+
 
 -- test for deadlocks caused by async exceptions in reader.
 checkDeadlocksReader times = do
-  procs <- getNumCapabilities
-  let run 0 = return ()
-      run n = do
-         (i,o) <- S.newChan
-         -- if we don't have at least three cores, then we need to write enough messages in first, before killing reader.
-         maybeWid <- if procs > 4 -- NOTE 4 might mean only two real cores, so be conservative here.
-                        then do wStart <- newEmptyMVar
-                                wid <- forkIO $ (putMVar wStart () >> (forever $ S.writeChan i (0::Int)))
-                                takeMVar wStart >> threadDelay 1 -- wait until we're writing
-                                return $ Just wid
-                             
-                             -- TODO wait until writer starts here
-                        else do replicateM_ 10000 $ S.writeChan i (0::Int)
-                                return Nothing
+  let run 0 numLate numRace = putStrLn $ "Lates: "++(show numLate)++", Races: "++(show numRace)
+      run n numLate numRace
+       | (numLate + numRace) > (times `div` 5) = error "This test is taking too long. Please retry, and if still failing send the log to me"
+       | otherwise = do
+         -- we'll kill the reader with our special exception half the time,
+         -- expecting that we never get our race condition on those runs:
+         let usingSpecialKill = even n
+
+         (i,o) <- UI.newChanStarting 0
+         -- preload a chan with 0s
+         let numPreloaded = 10000
+         replicateM_ numPreloaded $ U.writeChan i (0::Int)
+-- TODO: use busy-waiting with IORefs (here and elsewhere)
          rStart <- newEmptyMVar
-         rid <- forkIO $ (putMVar rStart () >> (forever $ void $ S.readChan o))
+         rid <- forkIO $ (if usingSpecialKill then UI.catchKillRethrow else id) $
+                    (putMVar rStart () >> (forever $ void $ U.readChan o))
          takeMVar rStart >> threadDelay 1
-         throwTo rid ThreadKilled
+         if usingSpecialKill
+            then UI.throwKillTo rid -- blocks until readChan blocking handler gaurenteed done
+            else throwTo rid ThreadKilled
          -- did killing reader damage queue for reads or writes?
-         S.writeChan i 1
-         z <- S.readChan o
-         -- clean up:
-         case maybeWid of 
-              Just wid -> throwTo wid ThreadKilled ; _ -> return ()
-         if z /= 0
-            then putStr "+" >> run n -- reader probably killed while blocked or before writer even wrote anything
-            else putStr "." >> run (n-1)
-  run times
+         U.writeChan i 1 `onException` ( putStrLn "Exception from first writeChan!")
+         U.writeChan i 2 `onException` ( putStrLn "Exception from second writeChan!")
+         z <- U.readChan o `onException` ( putStrLn "Exception from last readChan!")
+
+         case z of
+              -- normal run
+              0 -> putStr "." >> run (n-1) numLate numRace
+              _ -> do iCnt <- readCounter $ (\(UI.InChan (UI.ChanEnd _ cntr _))-> cntr) i
+                      oCnt <- readCounter $ (\(UI.OutChan(UI.ChanEnd _ cntr _))-> cntr) o
+                      if oCnt /= (numPreloaded + 1)
+                          then error $ "Checking OutChan counter, expected: "++(show $ numPreloaded + 1)++", but got: "++(show oCnt)
+                          else case z of
+                             -- reader killed (probably while blocked) after reading all messages
+                             1 | iCnt == (numPreloaded + 2) -> putStr "+" >> run n (numLate + 1) numRace
+                               | iCnt == (numPreloaded + 1) -> putStr "#" >> run n (numLate + 1) numRace
+                               | otherwise -> error $ "Checking InChan counter, expected: "++(show $ numPreloaded + 2)++
+                                                      ", or very rarely: "++(show $ numPreloaded + 1)++", but got: "++(show iCnt)
+                             -- (rare) exception raised on blocked reader, but write1 raced
+                             -- ahead of the exception-handler and its element was lost:
+                             2 | usingSpecialKill -> error "We lost a write when using throwKillTo!"
+                                 -- we can infer writeChan 1 never retried:
+                               | iCnt /= (numPreloaded + 1) -> error $ "With dropped element, Checking InChan counter, expected: "++
+                                                                        (show $ numPreloaded + 1)++", but got: "++(show iCnt)
+                               | otherwise -> putStr "X" >> run n numLate (numRace + 1)
+  run times 0 0
   putStrLn ""

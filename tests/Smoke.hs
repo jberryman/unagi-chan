@@ -36,7 +36,9 @@ testContention writers readers n = do
                  else putStrLn $ "Success, with interleaving pct of "++(show $ d)++" (closer to 1 means we have higher confidence in the test)."
       else error "What we put in isn't what we got out :("
 
+-- --------- Helpers:
 
+-- approx measure of interleaving (and hence contention) in test
 interleaving :: (Num a, Eq a) => [a] -> Float
 interleaving [] = 0
 interleaving (x:xs) =  (snd $ foldl' countNonIncr (x,0) xs) / l

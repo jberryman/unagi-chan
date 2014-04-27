@@ -1,11 +1,16 @@
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE BangPatterns , DeriveDataTypeable #-}
 module Control.Concurrent.Chan.Unagi.Internal
     where
 
 -- Internals exposed for testing.
+
 import Control.Concurrent.MVar
+import Control.Concurrent(ThreadId)
 import Data.IORef
-import Control.Exception(mask_,assert,onException)
+-- import Control.Exception(mask_,assert,onException,throwIO,SomeException,Exception)
+import Control.Exception
+import qualified Control.Exception as E
+import Data.Typeable
 
 import Control.Monad.Primitive(RealWorld)
 import Data.Atomics.Counter
@@ -14,8 +19,6 @@ import qualified Data.Primitive as P
 
 import Control.Monad
 import Control.Applicative
-
-import Debug.Trace
 
 -- TODO WRT GARBAGE COLLECTION
 --  This can lead to large amounts of memory use in theory:
@@ -149,7 +152,7 @@ moveToNextCell :: ChanEnd a -> IO (Int, Stream a)
 {-# INLINE moveToNextCell #-}
 moveToNextCell (ChanEnd segSource counter streamHead) = do
     str0@(Stream offset0 _ _) <- readIORef streamHead
-    -- !!! TODO BARRIER MAYBE REQUIRED !!!
+    -- !!! TODO BARRIER REQUIRED FOR NON-X86 !!!
     ix <- incrCounter 1 counter
     let go str@(Stream offset _ next) =
           let !segIx = ix - offset
@@ -281,29 +284,68 @@ readCell arr ix = do
             (success,elseWrittenCell) <- casArrayElem arr ix cellTkt (Blocking v)
             return $
               if success 
-                -- Block, waiting for the future writer.
+                -- Block, waiting for the future writer. -- NOTE [1]
                 then Right (takeMVar v `onException` (
                        -- re. writeArray race condition: if read overlaps with
                        -- write, this is undefined behavior anyway:
-                       P.writeArray arr ix BlockedAborted ) )
+                       P.writeArray arr ix BlockedAborted ) ) -- NOTE [2]
                 -- In the meantime a writer has written. Good!
                 else case peekTicket elseWrittenCell of
                           Written a -> Left a
                           _ -> error "Impossible! Expecting Written"
          _ -> error "Impossible! Only expecting Empty or Written"
 
+-- [1] When a reader is blocked and an async exception is raised we risk losing
+-- the next written element. To avoid this our handler writes BlockedAborted to
+-- signal the next writer to retry. Unfortunately we can't force a `throwTo` to
+-- block until our handler *finishes* (see trac #9030) thus introducing a race
+-- condition that could cause a thread to observe different semantics to Chan.
+--
+-- [2] re. writeArray race condition: if read overlaps with write, this is
+-- undefined behavior anyway:
+
+
+
+-- JUST FOR DEBUGGING / TESTING FOR NOW:
+
+
+newtype ThreadKilledChan = ThreadKilledChan (MVar ())
+    deriving (Typeable)
+instance Show ThreadKilledChan where
+    show _ = "ThreadKilledChan"
+instance Exception ThreadKilledChan
+
+throwKillTo :: ThreadId -> IO ()
+throwKillTo tid = do
+    v <- newEmptyMVar
+    throwTo tid (ThreadKilledChan v)
+    takeMVar v
+
+catchKillRethrow :: IO a -> IO a
+catchKillRethrow io = 
+   io `E.catches` [
+             Handler $ \(ThreadKilledChan bvar)-> do
+               putMVar bvar () -- unblocking thrower
+               throwIO ThreadKilled
+           , Handler $ \e-> do
+               throwIO (e :: SomeException) 
+           ] 
+
 
 {- TESTS SKETCH
- - Test these assumptions:
-     1) If a CAS fails in thread 1 then another CAS (in thread 2, say) succeeded
-     2) In the case that thread 1's CAS failed, the ticket returned with (False,tk) will contain that newly-written value from thread 2
- - record debugging events for:
-     - next segment not pre-allocated
-     - etc...
- - test with initial counter position at almost-rollover to test that.
- - single-threaded W/R/W/R... and WWW... RRR... over overflow barrier
+ - finish read exception-safety test:
+     - implement cancelReader
+     - pass Bool signifying whether to do normal throwTo, or cancelReader
+     - print X for the former, and error if any experienced with the latter
+ - change all tests and benchmarks to use IORef busy-waiting.
+ - validate with some benchmarks
  - make sure that first write after chan creation goes into [0] and that specified initial offset was correct.
  - Make sure we never get False returned on casIORef where we no no conflicts, i.e. no false negatives
      - also include arbitrary delays between readForCAS and the CAS
  - (Not a test, but...) add a brunch with a whole load of event logging that we can analyze (maybe in an automated test!)
+ - perhaps run num_threads readers and writers, plus some threads that can inspect the queues
+    for bad descheduling conditions we want to avoid.
+ - use quickcheck to generate 'new' chans that represent possible conditions and test those with write/read (or with our regular test suite?)
+    - we also want to test counter roll-over
+ - actual 'smoke' unit test, single-threaded write some/read, with different initial counter offsets.
  -}

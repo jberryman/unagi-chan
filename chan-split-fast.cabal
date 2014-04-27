@@ -19,37 +19,36 @@ flag dev
   default: False
   manual: True
 
--- TODO in tests, compile with optimizations, but add -f-no-ignore-asserts
 
 library
   exposed-modules:     Control.Concurrent.Chan.Split
                      , Control.Concurrent.Chan.Split.Internal
                      , Control.Concurrent.Chan.Unagi
-
   other-modules:       Control.Concurrent.Chan.Unagi.Internal
-
   ghc-options:        -Wall
   ghc-prof-options:   -fprof-auto
-
   build-depends:       base
                      , atomic-primops==0.6.0.5
                      , primitive>=0.5.3
   default-language:    Haskell2010
 
+
+-- TODO  Benchmarks: (see chan-benchmarks)
+-- TODO  possibly have a different Main.hs for each Chan type, but then use different test-suites which set a var to decide which to import.
 test-suite test
   type: exitcode-stdio-1.0
-  
-  --     -qa  -feager-blackholing  -qg1
   ghc-options: -O2  -rtsopts  -threaded -with-rtsopts=-N
-
+  ghc-options: -fno-ignore-asserts
+   -- for stack traces:
+--ghc-options: -prof -auto-all -caf-all -with-rtsopts=-xc  
   hs-source-dirs: tests, ./
-                 
   main-is: Main.hs
-
   build-depends:       base
                      , atomic-primops==0.6.0.5
                      , primitive>=0.5.3
   default-language:    Haskell2010
+
+
 
 -- for profiling, checking out core, etc
 executable dev-example
