@@ -306,7 +306,7 @@ readCell arr ix = do
 
 
 
--- JUST FOR DEBUGGING / TESTING FOR NOW:
+-- JUST FOR DEBUGGING / TESTING FOR NOW --
 
 
 newtype ThreadKilledChan = ThreadKilledChan (MVar ())
@@ -333,16 +333,12 @@ catchKillRethrow io =
 
 
 {- TESTS SKETCH
- - finish read exception-safety test:
-     - implement cancelReader
-     - pass Bool signifying whether to do normal throwTo, or cancelReader
-     - print X for the former, and error if any experienced with the latter
- - change all tests and benchmarks to use IORef busy-waiting.
  - validate with some benchmarks
+ - look over implementation for other assertions / micro-tests
  - make sure that first write after chan creation goes into [0] and that specified initial offset was correct.
  - Make sure we never get False returned on casIORef where we no no conflicts, i.e. no false negatives
      - also include arbitrary delays between readForCAS and the CAS
- - (Not a test, but...) add a brunch with a whole load of event logging that we can analyze (maybe in an automated test!)
+ - (Not a test, but...) add a branch with a whole load of event logging that we can analyze (maybe in an automated test!)
  - perhaps run num_threads readers and writers, plus some threads that can inspect the queues
     for bad descheduling conditions we want to avoid.
  - use quickcheck to generate 'new' chans that represent possible conditions and test those with write/read (or with our regular test suite?)

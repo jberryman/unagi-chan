@@ -39,4 +39,5 @@ main = do
     putStrLn $ "Checking for deadlocks from killed writer, x"++show tries
     checkDeadlocksWriter tries
 
+    -- unagi-specific tests
     unagiMain
