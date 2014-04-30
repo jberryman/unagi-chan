@@ -35,9 +35,10 @@ import Control.Applicative
 --     around?)
 
 
--- approx time_to_create_new_segment / time_for_read_IOref, + some margin. See
+-- approx (time_to_create_new_segment / time_for_read_IOref) + some margin. See
 -- usage site.
 rEADS_FOR_SEGMENT_CREATE_WAIT :: Int
+{-# INLINE rEADS_FOR_SEGMENT_CREATE_WAIT #-}
 rEADS_FOR_SEGMENT_CREATE_WAIT = 20
 
 newtype InChan a = InChan (ChanEnd a)
@@ -58,7 +59,8 @@ data ChanEnd a =
             !(IORef (Stream a))
 
 type StreamSegment a = P.MutableArray RealWorld (Cell a)
--- TRANSITIONS:
+
+-- TRANSITIONS and POSSIBLE VALUES:
 --   During Read:
 --     Empty   -> Blocking  (-> BlockedAborted)
 --     Written
@@ -73,6 +75,7 @@ data Cell a = Empty | Written a | Blocking (MVar a) | BlockedAborted
 --   - make most of overheads of moving to the next segment, etc.
 --   - provide enough runway for creating next segment when 32 simultaneous writers 
 sEGMENT_LENGTH :: Int
+{-# INLINE sEGMENT_LENGTH #-}
 sEGMENT_LENGTH = 64
 -- NOTE In general we'll have two segments allocated at any given time in
 -- addition to the segment template, so in the worst case, when the program
@@ -163,7 +166,7 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
                   when (segIx == 0 && offset /= offset0) $  -- NOTE [2]
                     writeIORef streamHead str 
                   return (segIx , str)
-                else waitingAdvanceStream next offset segSource (20*segIx) -- NOTE [1]
+                else waitingAdvanceStream next offset segSource (rEADS_FOR_SEGMENT_CREATE_WAIT*segIx) -- NOTE [1]
                       >>= go
     go str0
   -- [1] All readers or writers needing to work with a not-yet-created segment
@@ -180,12 +183,11 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
 advanceStream :: Stream a -> SegSource a -> IO ()
 {-# INLINE advanceStream #-}
 advanceStream (Stream offset _ next) segSource = void $
-    waitingAdvanceStream next offset segSource (0::Int)
+    waitingAdvanceStream next offset segSource 0
 
--- thread-safely try to fill `nextSegRef` at the `nextOffset` with a new
+-- thread-safely try to fill `nextSegRef` at the next offset with a new
 -- segment, waiting some number of iterations (for other threads to handle it).
 -- Returns nextSegRef's StreamSegment.
---
 waitingAdvanceStream :: IORef (NextSegment a) -> Int -> SegSource a 
                      -> Int -> IO (Stream a)
 {-# INLINE waitingAdvanceStream #-}
@@ -195,13 +197,13 @@ waitingAdvanceStream nextSegRef prevOffset segSource = go where
     case peekTicket tk of
          NoSegment 
            | wait > 0 -> go (wait - 1)
-             -- create a potential next segment and try to insert it:
+             -- Create a potential next segment and try to insert it:
            | otherwise -> do 
-               let nextOffset = prevOffset + sEGMENT_LENGTH
-               potentialStrNext <- Stream nextOffset <$> segSource <*> newIORef NoSegment
+               potentialStrNext <- Stream (prevOffset + sEGMENT_LENGTH) 
+                                      <$> segSource 
+                                      <*> newIORef NoSegment
                (_,tkDone) <- casIORef nextSegRef tk (Next potentialStrNext)
-               -- that may have failed (meaning another thread took care of
-               -- it); regardless next segment must now be there:
+               -- If that failed another thread succeeded (no false negatives)
                case peekTicket tkDone of
                  Next strNext -> return strNext
                  _ -> error "Impossible! This should only have been Next segment"
@@ -335,7 +337,6 @@ catchKillRethrow io =
 {- TESTS SKETCH
  - validate with some benchmarks
  - look over implementation for other assertions / micro-tests
- - make sure that first write after chan creation goes into [0] and that specified initial offset was correct.
  - Make sure we never get False returned on casIORef where we no no conflicts, i.e. no false negatives
      - also include arbitrary delays between readForCAS and the CAS
  - (Not a test, but...) add a branch with a whole load of event logging that we can analyze (maybe in an automated test!)
@@ -343,5 +344,4 @@ catchKillRethrow io =
     for bad descheduling conditions we want to avoid.
  - use quickcheck to generate 'new' chans that represent possible conditions and test those with write/read (or with our regular test suite?)
     - we also want to test counter roll-over
- - actual 'smoke' unit test, single-threaded write some/read, with different initial counter offsets.
  -}
