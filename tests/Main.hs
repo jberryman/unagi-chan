@@ -26,7 +26,10 @@ main = do
         then error "Tests are only effective if more than 1 core is available"
         else return ()
     hSetBuffering stdout NoBuffering
+
+    -- -----------------------------------
  
+    fifoSmoke 100000
     testContention 2 2 1000000
 
     -- QSem tests:

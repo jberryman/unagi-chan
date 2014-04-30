@@ -1,4 +1,4 @@
-module Unagi where
+module Unagi (unagiMain) where
 
 -- Unagi-chan-specific tests
 

@@ -11,6 +11,16 @@ import qualified Control.Concurrent.Chan as C
 
 import Data.List
 
+fifoSmoke :: Int -> IO ()
+fifoSmoke n = do
+    putStr "FIFO smoke test... "
+    (i,o) <- S.newChan
+    mapM_ (S.writeChan i) [1..n]
+    nsOut <- replicateM n $ S.readChan o
+    if nsOut == [1..n]
+        then putStrLn "OK"
+        else error "Cough!"
+
 testContention :: Int -> Int -> Int -> IO ()
 testContention writers readers n = do
   let nNice = n - rem n (lcm writers readers)
