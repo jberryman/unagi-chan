@@ -47,7 +47,7 @@ checkDeadlocksReader times = do
                      then putStr "0" >> run n (normalRetries+1) numRace
                       -- normal run
                      else putStr "." >> run (n-1) normalRetries numRace
-              _ -> do iCnt <- readCounter $ (\(UI.InChan (UI.ChanEnd _ cntr _))-> cntr) i
+              _ -> do iCnt <- readCounter $ (\(UI.InChan _ (UI.ChanEnd _ cntr _))-> cntr) i
                       if oCnt /= (numPreloaded + 1)
                           then error $ "Checking OutChan counter, expected: "++(show $ numPreloaded + 1)++", but got: "++(show oCnt)
                           else case z of

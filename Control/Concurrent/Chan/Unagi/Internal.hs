@@ -41,13 +41,13 @@ rEADS_FOR_SEGMENT_CREATE_WAIT :: Int
 {-# INLINE rEADS_FOR_SEGMENT_CREATE_WAIT #-}
 rEADS_FOR_SEGMENT_CREATE_WAIT = 20
 
-newtype InChan a = InChan (ChanEnd a)
+data InChan a = InChan !(Ticket (Cell a)) !(ChanEnd a)
 newtype OutChan a = OutChan (ChanEnd a)
 -- TODO derive Eq & Typeable
 
 
--- InChan & OutChan are identical, sharing a stream, but with independent
--- counters
+-- InChan & OutChan are mostly identical, sharing a stream, but with
+-- independent counters
 data ChanEnd a = 
            -- an efficient producer of segments of length sEGMENT_LENGTH:
     ChanEnd !(SegSource a)
@@ -99,17 +99,20 @@ newChanStarting :: Int -> IO (InChan a, OutChan a)
 newChanStarting startingCellOffset = do
     let firstCount = startingCellOffset - 1
     segSource <- newSegmentSource
-    stream <- Stream startingCellOffset <$> segSource <*> newIORef NoSegment
+    firstSeg <- segSource
+    -- collect a ticket to save for writer CAS
+    savedEmptyTkt <- readArrayElem firstSeg 0
+    stream <- Stream startingCellOffset firstSeg <$> newIORef NoSegment
     let end = ChanEnd segSource <$> newCounter firstCount <*> newIORef stream
-    liftA2 (,) (InChan <$> end) (OutChan <$> end)
+    liftA2 (,) (InChan savedEmptyTkt <$> end) (OutChan <$> end)
 
 writeChan :: InChan a -> a -> IO ()
 {-# INLINABLE writeChan #-}
-writeChan c@(InChan ce@(ChanEnd segSource _ _)) a = mask_ $ do
+writeChan c@(InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
     (segIx, str@(Stream _ segment _)) <- moveToNextCell ce
  -- NOTE: at this point we have an obligation to the reader of the assigned
  -- cell and what follows must have async exceptions masked:
-    maybeWroteFirst <- writeCell segment segIx a
+    maybeWroteFirst <- writeCell savedEmptyTkt segment segIx a
     case maybeWroteFirst of 
          -- retry if cell reader is seen to have been killed:
          Nothing -> writeChan c a  -- NOTE [1]
@@ -239,28 +242,25 @@ newSegmentSource = do
 -- Once we have the stream segment to which we've been assigned, write to our
 -- assigned index. returns Nothing if we have to retry, otherwise a Bool
 -- indicating whether we beat any waiting readers.
-writeCell :: StreamSegment a -> Int -> a -> IO (Maybe Bool)
+writeCell :: Ticket (Cell a) -> StreamSegment a -> Int -> a -> IO (Maybe Bool)
 {-# INLINE writeCell #-}
-writeCell arr ix a = do
-    cellTkt <- readArrayElem arr ix
-    case peekTicket cellTkt of
-         Empty -> do (success,cellTkt') <- casArrayElem arr ix cellTkt (Written a)
-                     if success 
-                         then return (Just True)
-                         else handleNotEmpty (peekTicket cellTkt')
-         cell -> handleNotEmpty cell
-
-  where handleNotEmpty (Blocking v)   = putMVar v a >> return (Just False)
-        -- a reader was killed (async exception) such that if `a` disappeared
-        -- this might be observed to differ from the semantics of Chan. Retry:
-        handleNotEmpty BlockedAborted = return Nothing
-        handleNotEmpty _ 
+writeCell savedEmptyTkt arr ix a = do
+    (success,nonEmptyTkt) <- casArrayElem arr ix savedEmptyTkt (Written a)
+    if success 
+        then return (Just True)
+        else case peekTicket nonEmptyTkt of
+                  (Blocking v) -> putMVar v a >> return (Just False)
+                  -- a reader was killed (async exception) such that if `a`
+                  -- disappeared this might be observed to differ from the
+                  -- semantics of Chan. Retry:
+                  BlockedAborted -> return Nothing
+                  _ ->
             -- Theoretical race condition: Writer reads head, then descheduled.
             -- Millions of segments are allocated and counter incremented but
             -- none manage to move the head pointer. When the counter comes
             -- back around, the next writer assigned this count will write to
             -- the cell we've been assigned and this error will be raised.
-            = error "Nearly Impossible! Expected Blocking or BlockedAborted"
+                      error "Nearly Impossible! Expected Blocking or BlockedAborted"
         -- TODO A WORSE CASE: another descheduled thread from this same block
         --      completes, moving the pointer way backwards.
         -- HOW TO SOLVE?
