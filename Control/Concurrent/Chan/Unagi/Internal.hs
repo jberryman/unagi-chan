@@ -59,7 +59,6 @@ import Control.Applicative
 -- Back-of-envelope (time_to_create_new_segment / time_for_read_IOref) + margin.
 -- See usage site.
 rEADS_FOR_SEGMENT_CREATE_WAIT :: Int
-{-# INLINE rEADS_FOR_SEGMENT_CREATE_WAIT #-}
 rEADS_FOR_SEGMENT_CREATE_WAIT = round (((14.6::Float) + 0.3*fromIntegral sEGMENT_LENGTH) / 3.7) + 10
 
 data InChan a = InChan !(Ticket (Cell a)) !(ChanEnd a)
@@ -83,6 +82,8 @@ data ChanEnd a =
             -- is greater than the counter value
             !(IORef (Stream a))
 
+--TODO later see if we get a benefit from the small array primops in 7.10,
+--     which omit card-marking overhead and might have faster clone.
 type StreamSegment a = P.MutableArray RealWorld (Cell a)
 
 -- TRANSITIONS and POSSIBLE VALUES:
@@ -113,7 +114,6 @@ data Cell a = Empty | Written a | Blocking (MVar a) | BlockedAborted -- TODO !(M
 --   - as arrays collect in heap, performance will be destroyed:  
 --       http://stackoverflow.com/q/23462004/176841
 sEGMENT_LENGTH :: Int
-{-# INLINE sEGMENT_LENGTH #-}
 sEGMENT_LENGTH = 1024 -- TODO Finalize this default.
 -- NOTE In general we'll have two segments allocated at any given time in
 -- addition to the segment template, so in the worst case, when the program
@@ -130,11 +130,11 @@ data Stream a =
            !(IORef (NextSegment a))
 
 data NextSegment a = NoSegment | Next !(Stream a) -- TODO or Maybe? Does unboxing strict matter here?
+                                                  -- TODO or is unboxing here maybe even self-defeating?
                                                   -- TODO maybe even make a single-constructor w/ Int?
 
 -- we expose `startingCellOffset` for debugging correct behavior with overflow:
 newChanStarting :: Int -> IO (InChan a, OutChan a)
-{-# INLINE newChanStarting #-}
 newChanStarting startingCellOffset = do
     let firstCount = startingCellOffset - 1
     segSource <- newSegmentSource
@@ -147,7 +147,6 @@ newChanStarting startingCellOffset = do
 
 
 writeChan :: InChan a -> a -> IO ()
-{-# INLINABLE writeChan #-}
 writeChan c@(InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
     (segIx, str@(Stream _ segment _)) <- moveToNextCell ce
  -- NOTE: at this point we have an obligation to the reader of the assigned
@@ -190,7 +189,8 @@ writeChan c@(InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
 
 
 readChan :: OutChan a -> IO a
-{-# INLINABLE readChan #-}
+-- TODO consider removing this mask_ (does result in a performance improvement)
+--      maybe providing an alternative function.
 readChan (OutChan ce@(ChanEnd segSource _ _)) = mask_ $ do  -- NOTE [1]
     (segIx, str@(Stream _ segment _)) <- moveToNextCell ce
     cellTkt <- readArrayElem segment segIx
@@ -235,7 +235,6 @@ readChan (OutChan ce@(ChanEnd segSource _ _)) = mask_ $ do  -- NOTE [1]
 -- stream head pointer as needed), and returns the stream segment and relative
 -- index of our cell.
 moveToNextCell :: ChanEnd a -> IO (Int, Stream a)
-{-# INLINE moveToNextCell #-}
 moveToNextCell (ChanEnd segSource counter streamHead) = do
     str0@(Stream offset0 _ _) <- readIORef streamHead
     -- !!! TODO BARRIER REQUIRED FOR NON-X86 !!!
@@ -266,7 +265,6 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
 
 
 advanceStreamIfFirst :: Int -> Stream a -> SegSource a -> IO ()
-{-# INLINE advanceStreamIfFirst #-}
 advanceStreamIfFirst segIx (Stream offset _ next) segSource = 
     when (segIx == 0) $ void $
         waitingAdvanceStream next offset segSource 0
@@ -276,7 +274,6 @@ advanceStreamIfFirst segIx (Stream offset _ next) segSource =
 -- Returns nextSegRef's StreamSegment.
 waitingAdvanceStream :: IORef (NextSegment a) -> Int -> SegSource a 
                      -> Int -> IO (Stream a)
-{-# INLINE waitingAdvanceStream #-}
 waitingAdvanceStream nextSegRef prevOffset segSource = go where
   go !wait = assert (wait >= 0) $ do
     tk <- readForCAS nextSegRef
