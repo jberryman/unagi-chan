@@ -33,18 +33,38 @@ import Control.Applicative
 --   - hold weak reference to previous segment, and when we move the head
 --     pointer, update `next` to point to this new segment (if it is still
 --     around?)
+-- TODO performance
+--   - eliminate some indirection, by replacing IORefs with Arrays of Arrays
+--   - replace constructors with ints, try to stuff things into unboxed references as much as possible
+--
+-- TODO Custom fancy CMM wizardry
+--  Maybe some fancy, custom CMM for array writes and reads:
+--    - write (or CAS, I suppose) wouldn't need to check array size to find card table (because we know sEGMENT_LENGTH)
+--    - write might not need to mark cards at all (since all elements are sharing a cheap value before write)
+--    - instead we want reader to possibly do that
+--       - read might only do a single card marking *after* filling the correspinding segment of e.g. 128 elems
+--       - or is there some sort of "block write" for boxed arrays (copyArray?) that could be used after advancing past a certain point which would trigger a card marking?
+--          - PROBLEM: other readers behind us may not have read their value yet.
+--          - what about the read that *ends* a cards block marks that card?
+--    - or can we just make smaller size arrays and turn off cardmarking on write?
+--    - But GC still has to traverse card bytes; can we redefine array (or newArray primop) so that it has no/fewer card bits? 
+--       see: https://ghc.haskell.org/trac/ghc/ticket/650#comment:17
+--    https://ghc.haskell.org/trac/ghc/ticket/650
 
-
--- approx (time_to_create_new_segment / time_for_read_IOref) + some margin. See
--- usage site.
+-- Back-of-envelope (time_to_create_new_segment / time_for_read_IOref) + margin.
+-- See usage site.
 rEADS_FOR_SEGMENT_CREATE_WAIT :: Int
 {-# INLINE rEADS_FOR_SEGMENT_CREATE_WAIT #-}
-rEADS_FOR_SEGMENT_CREATE_WAIT = 20
+rEADS_FOR_SEGMENT_CREATE_WAIT = round (((14.6::Float) + 0.3*fromIntegral sEGMENT_LENGTH) / 3.7) + 10
 
 data InChan a = InChan !(Ticket (Cell a)) !(ChanEnd a)
 newtype OutChan a = OutChan (ChanEnd a)
 -- TODO derive Eq & Typeable
 
+-- TODO POTENTIAL CPP FLAGS (or functions)
+--   - Strict element (or lazy? maybe also reveal a writeChan' when relevant?)
+--   - sEGMENT_LENGTH
+--   - reads that clear the element immediately (or export as a special function?)
 
 -- InChan & OutChan are mostly identical, sharing a stream, but with
 -- independent counters
@@ -68,15 +88,28 @@ type StreamSegment a = P.MutableArray RealWorld (Cell a)
 --     Empty   -> Written 
 --     Blocking
 --     BlockedAborted
-data Cell a = Empty | Written a | Blocking (MVar a) | BlockedAborted
+data Cell a = Empty | Written a | Blocking (MVar a) | BlockedAborted -- TODO !(Mvar a)
+                                                                     -- TODO !a (maybe make optional)
+                                                                     -- TODO ptr tagging? try combining these constructors
 
+--   TODO:
+--     However, then we have to consider how more elements will be kept around,
+--     unable to be GC'd until we move onto the next segment. Solutions
+--       - make read also CAS the element back to Empty (downside: slower reads)
+--       - make the write strict to avoid some space-leaks at least 
+--         - similarly, having Cell be an unboxed strict field.
+--       - re-write writeArray CMM to avoid card-marking for a 'writeArray undefined'.
+--
 -- Constant for now: back-of-envelope considerations:
 --   - making most of constant factor for cloning array of *any* size
 --   - make most of overheads of moving to the next segment, etc.
 --   - provide enough runway for creating next segment when 32 simultaneous writers 
+--   - the larger this the larger one-time cost for the lucky reader/writer
+--   - as arrays collect in heap, performance will be destroyed:  
+--       http://stackoverflow.com/q/23462004/176841
 sEGMENT_LENGTH :: Int
 {-# INLINE sEGMENT_LENGTH #-}
-sEGMENT_LENGTH = 64
+sEGMENT_LENGTH = 1024 -- TODO Finalize this default.
 -- NOTE In general we'll have two segments allocated at any given time in
 -- addition to the segment template, so in the worst case, when the program
 -- exits we will have allocated ~ 3 segments extra memory than was actually
@@ -92,6 +125,7 @@ data Stream a =
            !(IORef (NextSegment a))
 
 data NextSegment a = NoSegment | Next !(Stream a) -- TODO or Maybe? Does unboxing strict matter here?
+                                                  -- TODO maybe even make a single-constructor w/ Int?
 
 -- we expose `startingCellOffset` for debugging correct behavior with overflow:
 newChanStarting :: Int -> IO (InChan a, OutChan a)
@@ -171,6 +205,8 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
                   return (segIx , str)
                 else waitingAdvanceStream next offset segSource (rEADS_FOR_SEGMENT_CREATE_WAIT*segIx) -- NOTE [1]
                       >>= go
+    -- TODO calculate number of strides ahead of time and pass, so no need to keep checking `offset`
+    --      pass a `differentHead` Bool set to false first (then True), replacing offset /= offset0 (maybe turn that into an assertion)
     go str0
   -- [1] All readers or writers needing to work with a not-yet-created segment
   -- race to create it, but those past index 0 have progressively long waits; 20
@@ -222,9 +258,10 @@ type SegSource a = IO (StreamSegment a)
 newSegmentSource :: IO (SegSource a)
 {-# INLINE newSegmentSource #-}
 newSegmentSource = do
+    -- TODO check that Empty is actually shared (or however that works with
+    --      single-constructors)
     arr <- P.newArray sEGMENT_LENGTH Empty
     return (P.cloneMutableArray arr 0 sEGMENT_LENGTH)
-
 
 -- ----------
 -- CELLS AND GC:
@@ -270,7 +307,6 @@ writeCell savedEmptyTkt arr ix a = do
         --         - if not, then probably worth it.
         --      - use heuristic, or just only move if within some forward window
         --         maybe just subtract and only move if positive, then do?
-
 
 -- ...and likewise for the reader. Each index of each segment has at most one
 -- reader and one writer assigned by the atomic counters. We return either the

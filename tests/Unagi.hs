@@ -31,7 +31,7 @@ unagiMain = do
 
 smoke n = smoke1 n >> smoke2 n
 
--- write all / read all spanning overflow
+-- www.../rrr... spanning overflow
 smoke1 n = do
     (i,o) <- newChanStarting n
     let inp = [0 .. (sEGMENT_LENGTH * 3)]
@@ -62,6 +62,9 @@ correctFirstWrite n = do
     case cell of
          UI.Written () -> return ()
          _ -> error "Expected a Write at index 0"
+
+
+
 
 {- NOTE: we would like this to pass (see trac #9030) but are happy to note that
  -       it fails which somewhat validates the test below
@@ -94,61 +97,3 @@ testBlockedRecovery = do
     -- In a buggy implementation, this would consistently win failing by losing
     -- the message and raising BlockedIndefinitely here:
     readChan o
-
-{- THIS PASSES, BUT IN FACT GIVES US SEGFAULTS IN OUR BENCHMARKS
-  Relevant Segfault-y variation from `newSegmentSource`
-  -------
-    return $ do
-        arrClone <- P.cloneMutableArray arr 0 sEGMENT_LENGTH
-        _ <- P.unsafeFreezeArray arrClone  -- NOTE [1]
-        return arrClone
-  -- [1] A bit of a hack to keep this array out of the remembered set, avoiding
-  -- bad GC behavior as in (1). Note that each cell is only written to once
-  -- after initialization, and that initial element is always shared. For this
-  -- use-case everything is working against us to do extra work. See also (1,2)
-  --  1) http://stackoverflow.com/questions/23462004/code-becomes-slower-as-more-boxed-arrays-are-allocated/23557704
-  --  2) https://ghc.haskell.org/trac/ghc/wiki/Commentary/Rts/Storage/GC/RememberedSets#Mutableobjects:MUT_VARMVAR
-  --  3) https://ghc.haskell.org/trac/ghc/wiki/Commentary/Rts/Storage/GC/EagerPromotion
-  -------
-
-import System.Mem(performGC)
-
--- Test our array freezing trick used in `newSegmentSource`. We rely on other
--- tests to catch other problems.
-arrayFreezing = do
-  sig <- newEmptyMVar
-  performGC -- -- DO THIS A LOT
-  var <- newEmptyMVar
-  performGC -- -- DO THIS A LOT
-  -- making sure var is GC'd at some point:
-  mkWeakMVar var (putMVar sig True)
-  performGC -- -- DO THIS A LOT
-
-  -- this is how we create our segments:
-  toCopy <- P.newArray 2 (Just var)
-  performGC -- -- DO THIS A LOT
-  arr1 <- P.cloneMutableArray toCopy 0 2
-  performGC -- -- DO THIS A LOT
-  P.unsafeFreezeArray arr1
-  performGC -- -- DO THIS A LOT
-
-  P.writeArray arr1 0 Nothing
-  performGC -- -- DO THIS A LOT
-  -- make sure chance for var to be collected, but isn't
-  Just var' <- P.readArray arr1 1
-  performGC -- -- DO THIS A LOT
-  putMVar var' ()
-  performGC -- -- DO THIS A LOT
-  P.writeArray arr1 1 Nothing
-  performGC -- -- DO THIS A LOT
-
-  -- preserve MVar for finalizer, also acts as timeout
-  x <- forkIO (threadDelay 10000000 >> putMVar sig False)
-  performGC -- -- DO THIS A LOT
-  wasGCd <- takeMVar sig
-  performGC -- -- DO THIS A LOT
-  throwTo x ThreadKilled
-  performGC -- -- DO THIS A LOT
-  unless wasGCd $
-       error "It seems the initial mutable array element wasn't GC'd after references disappeared"
-       -}
