@@ -145,19 +145,39 @@ newChanStarting startingCellOffset = do
     let end = ChanEnd segSource <$> newCounter firstCount <*> newIORef stream
     liftA2 (,) (InChan savedEmptyTkt <$> end) (OutChan <$> end)
 
+
 writeChan :: InChan a -> a -> IO ()
 {-# INLINABLE writeChan #-}
 writeChan c@(InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
     (segIx, str@(Stream _ segment _)) <- moveToNextCell ce
  -- NOTE: at this point we have an obligation to the reader of the assigned
- -- cell and what follows must have async exceptions masked:
-    maybeWroteFirst <- writeCell savedEmptyTkt segment segIx a
-    case maybeWroteFirst of 
-         -- retry if cell reader is seen to have been killed:
-         Nothing -> writeChan c a  -- NOTE [1]
+ -- cell and what follows must already have async exceptions masked:
+    (success,nonEmptyTkt) <- casArrayElem segment segIx savedEmptyTkt (Written a)
+    if success 
          -- maybe optimistically try to set up next segment.
-         Just wroteFirst -> when (segIx == 0 && wroteFirst) $ -- NOTE [2]
-                              advanceStream str segSource
+        then advanceStreamIfFirst segIx str segSource
+        else case peekTicket nonEmptyTkt of
+                  Blocking v -> putMVar v a
+                  -- a reader was killed (async exception) such that if `a`
+                  -- disappeared this might be observed to differ from the
+                  -- semantics of Chan. Retry:
+                  BlockedAborted -> writeChan c a
+                  _ ->
+            -- Theoretical race condition: Writer reads head, then descheduled.
+            -- Millions of segments are allocated and counter incremented but
+            -- none manage to move the head pointer. When the counter comes
+            -- back around, the next writer assigned this count will write to
+            -- the cell we've been assigned and this error will be raised.
+                      error "Nearly Impossible! Expected Blocking or BlockedAborted"
+        -- TODO A WORSE CASE: another descheduled thread from this same block
+        --      completes, moving the pointer way backwards.
+        -- HOW TO SOLVE?
+        --     We want to move the pointer forward only
+        --      - could use "generations"
+        --         - would we have to deal with this anywhere else?
+        --         - if not, then probably worth it.
+        --      - use heuristic, or just only move if within some forward window
+        --         maybe just subtract and only move if positive, then do?
   -- [2] the writer or reader which arrives first to the first cell of a new
   -- segment is tasked (somewhat arbitrarily) with trying to pre-allocate the
   -- *next* segment hopefully ahead of any readers or writers who might need
@@ -168,19 +188,31 @@ writeChan c@(InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
   -- [1] Reader may have not set up the next segment, but we don't try here in
   -- the writer, even if segIx == 0
 
+
 readChan :: OutChan a -> IO a
 {-# INLINABLE readChan #-}
 readChan (OutChan ce@(ChanEnd segSource _ _)) = mask_ $ do  -- NOTE [1]
     (segIx, str@(Stream _ segment _)) <- moveToNextCell ce
-    futureA <- readCell segment segIx
-    case futureA of
-         Left a -> return a
-         Right blockingReturn_a -> do
-           -- if we're the first of the segment and about to do a blocking read
-           -- (i.e.  we beat writer to cell 0) then we optimistically set up
-           -- the next segment first, then perform that blocking read:
-           when (segIx == 0) $ advanceStream str segSource
-           blockingReturn_a
+    cellTkt <- readArrayElem segment segIx
+    case peekTicket cellTkt of
+         Written a -> return a
+         Empty -> do
+            v <- newEmptyMVar
+            (success,elseWrittenCell) <- casArrayElem segment segIx cellTkt (Blocking v)
+            if success 
+              then do 
+                -- if we're the first of the segment and about to do a blocking
+                -- read (i.e.  we beat writer to cell 0) then optimistically
+                -- set up the next segment first:
+                advanceStreamIfFirst segIx str segSource
+                -- Block, waiting for the future writer. -- NOTE [2]
+                takeMVar v `onException` (
+                  P.writeArray segment segIx BlockedAborted )  -- NOTE [3]
+              -- In the meantime a writer has written. Good!
+              else case peekTicket elseWrittenCell of
+                        Written a -> return a
+                        _ -> error "Impossible! Expecting Written"
+         _ -> error "Impossible! Only expecting Empty or Written"
   -- [1] we want our queue to behave like Chan in that (reasoning in terms of
   -- linearizability) the first reader waiting in line for an element may lose
   -- that element for good when an async exception is raised (when the read and
@@ -188,6 +220,15 @@ readChan (OutChan ce@(ChanEnd segSource _ _)) = mask_ $ do  -- NOTE [1]
   -- line" (i.e. which blocked after the first blocked reader) should never
   -- result in a lost message.  To that end we mask this, and on exception while
   -- blocking we write `BlockedAborted`, signaling writer to retry.
+  --
+  -- [2] When a reader is blocked and an async exception is raised we risk losing
+  -- the next written element. To avoid this our handler writes BlockedAborted to
+  -- signal the next writer to retry. Unfortunately we can't force a `throwTo` to
+  -- block until our handler *finishes* (see trac #9030) thus introducing a race
+  -- condition that could cause a thread to observe different semantics to Chan.
+  --
+  -- [3] re. writeArray race condition: if read overlaps with write, this is
+  -- undefined behavior anyway:
 
 
 -- increments counter, finds stream segment of corresponding cell (updating the
@@ -224,10 +265,11 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
   -- issue. TODO check we're not moving the head pointer backwards; maybe need a generation counter + handle overflow correctly.
 
 
-advanceStream :: Stream a -> SegSource a -> IO ()
-{-# INLINE advanceStream #-}
-advanceStream (Stream offset _ next) segSource = void $
-    waitingAdvanceStream next offset segSource 0
+advanceStreamIfFirst :: Int -> Stream a -> SegSource a -> IO ()
+{-# INLINE advanceStreamIfFirst #-}
+advanceStreamIfFirst segIx (Stream offset _ next) segSource = 
+    when (segIx == 0) $ void $
+        waitingAdvanceStream next offset segSource 0
 
 -- thread-safely try to fill `nextSegRef` at the next offset with a new
 -- segment, waiting some number of iterations (for other threads to handle it).
@@ -280,72 +322,6 @@ newSegmentSource = do
 --   Readers blocked indefinitely should eventually raise a
 --   BlockedIndefinitelyOnMVar.
 -- ----------
-
--- Once we have the stream segment to which we've been assigned, write to our
--- assigned index. returns Nothing if we have to retry, otherwise a Bool
--- indicating whether we beat any waiting readers.
-writeCell :: Ticket (Cell a) -> StreamSegment a -> Int -> a -> IO (Maybe Bool)
-{-# INLINE writeCell #-}
-writeCell savedEmptyTkt arr ix a = do
-    (success,nonEmptyTkt) <- casArrayElem arr ix savedEmptyTkt (Written a)
-    if success 
-        then return (Just True)
-        else case peekTicket nonEmptyTkt of
-                  (Blocking v) -> putMVar v a >> return (Just False)
-                  -- a reader was killed (async exception) such that if `a`
-                  -- disappeared this might be observed to differ from the
-                  -- semantics of Chan. Retry:
-                  BlockedAborted -> return Nothing
-                  _ ->
-            -- Theoretical race condition: Writer reads head, then descheduled.
-            -- Millions of segments are allocated and counter incremented but
-            -- none manage to move the head pointer. When the counter comes
-            -- back around, the next writer assigned this count will write to
-            -- the cell we've been assigned and this error will be raised.
-                      error "Nearly Impossible! Expected Blocking or BlockedAborted"
-        -- TODO A WORSE CASE: another descheduled thread from this same block
-        --      completes, moving the pointer way backwards.
-        -- HOW TO SOLVE?
-        --     We want to move the pointer forward only
-        --      - could use "generations"
-        --         - would we have to deal with this anywhere else?
-        --         - if not, then probably worth it.
-        --      - use heuristic, or just only move if within some forward window
-        --         maybe just subtract and only move if positive, then do?
-
--- ...and likewise for the reader. Each index of each segment has at most one
--- reader and one writer assigned by the atomic counters. We return either the
--- read element or a blocking IO "future" to be processed later by caller
-readCell :: StreamSegment a -> Int -> IO (Either a (IO a))
-{-# INLINE readCell #-}
-readCell arr ix = do
-    cellTkt <- readArrayElem arr ix
-    case peekTicket cellTkt of
-         Written a -> return $ Left a
-         Empty -> do
-            v <- newEmptyMVar
-            (success,elseWrittenCell) <- casArrayElem arr ix cellTkt (Blocking v)
-            return $
-              if success 
-                -- Block, waiting for the future writer. -- NOTE [1]
-                then Right (takeMVar v `onException` (
-                       -- re. writeArray race condition: if read overlaps with
-                       -- write, this is undefined behavior anyway:
-                       P.writeArray arr ix BlockedAborted ) ) -- NOTE [2]
-                -- In the meantime a writer has written. Good!
-                else case peekTicket elseWrittenCell of
-                          Written a -> Left a
-                          _ -> error "Impossible! Expecting Written"
-         _ -> error "Impossible! Only expecting Empty or Written"
-
--- [1] When a reader is blocked and an async exception is raised we risk losing
--- the next written element. To avoid this our handler writes BlockedAborted to
--- signal the next writer to retry. Unfortunately we can't force a `throwTo` to
--- block until our handler *finishes* (see trac #9030) thus introducing a race
--- condition that could cause a thread to observe different semantics to Chan.
---
--- [2] re. writeArray race condition: if read overlaps with write, this is
--- undefined behavior anyway:
 
 
 
