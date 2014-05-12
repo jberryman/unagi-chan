@@ -1,5 +1,10 @@
 {-# LANGUAGE BangPatterns , DeriveDataTypeable #-}
-module Control.Concurrent.Chan.Unagi.Internal
+module Control.Concurrent.Chan.Unagi.Internal (
+     sEGMENT_LENGTH
+    , InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell(..), Stream(..)
+    , newChanStarting, writeChan, readChan
+    , throwKillTo, catchKillRethrow
+    )
     where
 
 -- Internals exposed for testing.
