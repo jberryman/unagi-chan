@@ -133,6 +133,7 @@ data NextSegment a = NoSegment | Next !(Stream a) -- TODO or Maybe? Does unboxin
 
 -- we expose `startingCellOffset` for debugging correct behavior with overflow:
 newChanStarting :: Int -> IO (InChan a, OutChan a)
+{-# INLINE newChanStarting #-}
 newChanStarting startingCellOffset = do
     let firstCount = startingCellOffset - 1
     segSource <- newSegmentSource
@@ -146,6 +147,7 @@ newChanStarting startingCellOffset = do
 
 -- TODO could we replace the mask_ with an exception-handler (would that be faster?)
 writeChan :: InChan a -> a -> IO ()
+{-# INLINE writeChan #-}
 writeChan c@(InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
     (segIx, str@(Stream _ segment _)) <- moveToNextCell ce
  -- NOTE: at this point we have an obligation to the reader of the assigned
@@ -190,6 +192,7 @@ writeChan c@(InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
 readChan :: OutChan a -> IO a
 -- TODO consider removing this mask_ (does result in a performance improvement)
 --      maybe providing an alternative function.
+{-# INLINE readChan #-}
 readChan (OutChan ce@(ChanEnd segSource _ _)) = mask_ $ do  -- NOTE [1]
     (segIx, str@(Stream _ segment _)) <- moveToNextCell ce
     cellTkt <- readArrayElem segment segIx
@@ -239,7 +242,7 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
     str0@(Stream offset0 _ _) <- readIORef streamHead
     -- !!! TODO BARRIER REQUIRED FOR NON-X86 !!!
     ix <- incrCounter 1 counter
-    let !(!segsAway, !segIx) = (ix - offset0) `divMod` sEGMENT_LENGTH
+    let !(!segsAway, !segIx) = (ix - offset0) `quotRem` sEGMENT_LENGTH
         waitSpins = rEADS_FOR_SEGMENT_CREATE_WAIT*segIx -- NOTE [1]
         {-# INLINE go #-}
         go 0 str = return str
