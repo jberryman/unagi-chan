@@ -28,7 +28,7 @@ x @?= y = when (x /= y) $ error (show x ++ " /= " ++ show y)
 testCase :: String -> IO () -> IO ()
 testCase n io = putStrLn ("test " ++ n) >> io
 
-defaultMainQSem = sequence tests
+defaultMainQSem = sequence_ tests
 ------
 
 tests = [

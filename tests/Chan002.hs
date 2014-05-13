@@ -5,8 +5,6 @@ import qualified Control.Concurrent.Chan.Unagi as U
 import qualified Control.Concurrent.Chan.Unagi.Internal as UI
 import Control.Exception
 import Control.Monad
-import System.IO
-import System.Environment
 import Data.Atomics.Counter
 
 -- TODO This has gotten pretty unagi-specific. probably need a new generic one when we add other chans?
@@ -14,6 +12,7 @@ import Data.Atomics.Counter
 --          but still check numCapabilities and warn if < 4
 
 -- test for deadlocks caused by async exceptions in reader.
+checkDeadlocksReader :: Int -> IO ()
 checkDeadlocksReader times = do
   let run 0 normalRetries numRace = putStrLn $ "Lates: "++(show normalRetries)++", Races: "++(show numRace)
       run n normalRetries numRace
@@ -64,5 +63,6 @@ checkDeadlocksReader times = do
                                | iCnt /= (numPreloaded + 1) -> error $ "With dropped element, Checking InChan counter, expected: "++
                                                                         (show $ numPreloaded + 1)++", but got: "++(show iCnt)
                                | otherwise -> putStr "X" >> run n normalRetries (numRace + 1)
+                             _ -> error "Fix your #$%@ test!"
   run times 0 0
   putStrLn ""

@@ -2,7 +2,6 @@ module Main
     where
 
 import System.IO
-import System.Environment
 import Control.Concurrent
 import Control.Exception
 
@@ -15,6 +14,7 @@ import Smoke
 -- implementation-specific tests:
 import Unagi
 
+main :: IO ()
 main = do 
     assertionsWorking <- try $ assert False $ return ()
     case assertionsWorking of

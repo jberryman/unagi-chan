@@ -3,7 +3,6 @@ module Unagi (unagiMain) where
 -- Unagi-chan-specific tests
 
 import Control.Concurrent.Chan.Unagi
-import Control.Concurrent.Chan.Unagi.Internal(newChanStarting,sEGMENT_LENGTH)
 import qualified Control.Concurrent.Chan.Unagi.Internal as UI
 import Control.Monad
 import Control.Exception
@@ -16,8 +15,8 @@ unagiMain :: IO ()
 unagiMain = do
     -- ------
     putStr "Smoke test at different starting offsets, spanning overflow... "
-    mapM_ smoke $ [ (maxBound - sEGMENT_LENGTH - 1) .. maxBound] 
-                  ++ [minBound .. (minBound + sEGMENT_LENGTH + 1)]
+    mapM_ smoke $ [ (maxBound - UI.sEGMENT_LENGTH - 1) .. maxBound] 
+                  ++ [minBound .. (minBound + UI.sEGMENT_LENGTH + 1)]
     putStrLn "OK"
     -- ------
     putStr "Testing special async exception handling in blocked reader... "
@@ -27,14 +26,18 @@ unagiMain = do
     putStr "Correct first write... "
     mapM_ correctFirstWrite [ (maxBound - 7), maxBound, minBound, 0]
     putStrLn "OK"
+    -- ------
+    putStr "Correct initial writes... "
+    mapM_ correctInitialWrites [ (maxBound - UI.sEGMENT_LENGTH), (maxBound - UI.sEGMENT_LENGTH) - 1, maxBound, minBound, 0]
+    putStrLn "OK"
 
 
 smoke n = smoke1 n >> smoke2 n
 
 -- www.../rrr... spanning overflow
 smoke1 n = do
-    (i,o) <- newChanStarting n
-    let inp = [0 .. (sEGMENT_LENGTH * 3)]
+    (i,o) <- UI.newChanStarting n
+    let inp = [0 .. (UI.sEGMENT_LENGTH * 3)]
     mapM_ (writeChan i) inp
     outp <- getChanContents o
     if and (zipWith (==) inp outp)
@@ -43,8 +46,8 @@ smoke1 n = do
 
 -- w/r/w/r... spanning overflow
 smoke2 n = do
-    (i,o) <- newChanStarting n
-    let inp = [0 .. (sEGMENT_LENGTH * 3)]
+    (i,o) <- UI.newChanStarting n
+    let inp = [0 .. (UI.sEGMENT_LENGTH * 3)]
     mapM_ (check i o) inp
  where check i o x = do
          writeChan i x
@@ -55,7 +58,7 @@ smoke2 n = do
 
 correctFirstWrite :: Int -> IO ()
 correctFirstWrite n = do
-    (i,UI.OutChan (UI.ChanEnd _ _ arrRef)) <- newChanStarting n
+    (i,UI.OutChan (UI.ChanEnd _ _ arrRef)) <- UI.newChanStarting n
     writeChan i ()
     (UI.Stream _ arr _) <- readIORef arrRef
     cell <- P.readArray arr 0
@@ -63,6 +66,42 @@ correctFirstWrite n = do
          UI.Written () -> return ()
          _ -> error "Expected a Write at index 0"
 
+-- check writes by doing a segment+1-worth of reads by hand
+-- also check that segments pre-allocated as expected
+correctInitialWrites :: Int -> IO ()
+correctInitialWrites startN = do
+    (i,o@(UI.OutChan (UI.ChanEnd _ _ arrRef))) <- UI.newChanStarting startN
+    let writes = [0..UI.sEGMENT_LENGTH]
+    mapM_ (writeChan i) writes
+    (UI.Stream _ arr next) <- readIORef arrRef
+    -- check all of first segment:
+    forM_ (init writes) $ \ix-> do
+        cell <- P.readArray arr ix
+        case cell of
+             UI.Written n
+                | n == ix -> return ()
+                | otherwise -> error $ "Expected a Write at index "++(show ix)++" of same value but got "++(show n)
+             _ -> error $ "Expected a Write at index "++(show ix)
+    -- check last write:
+    lastSeg  <- readIORef next
+    case lastSeg of
+         (UI.Next (UI.Stream offs arr2 next2)) -> do
+            cell <- P.readArray arr2 0
+            case cell of
+                 UI.Written n 
+                    | n == last writes -> return ()
+                    | otherwise -> error $ "Expected last write at index "++(show $ last writes)++" of same value but got "++(show n)
+                 _ -> error "Expected a last Write"
+            -- check pre-allocation:
+            n2 <- readIORef next2
+            case n2 of 
+                (UI.Next (UI.Stream _ _ next3)) -> do
+                    n3 <- readIORef next3
+                    case n3 of
+                        UI.NoSegment -> return ()
+                        _ -> error "Too many segments pre-allocated!"
+                _ -> error "Next segment was not pre-allocated!"
+         _ -> error "No last segment present!"
 
 
 
