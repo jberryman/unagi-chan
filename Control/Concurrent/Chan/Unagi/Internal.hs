@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns , DeriveDataTypeable #-}
 module Control.Concurrent.Chan.Unagi.Internal (
      sEGMENT_LENGTH
-    , InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell(..), Stream(..)
+    , InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell(..), Stream(..), NextSegment(..)
     , newChanStarting, writeChan, readChan
     , throwKillTo, catchKillRethrow
     )
@@ -130,8 +130,6 @@ data Stream a =
            !(IORef (NextSegment a))
 
 data NextSegment a = NoSegment | Next !(Stream a) -- TODO or Maybe? Does unboxing strict matter here?
-                                                  -- TODO or is unboxing here maybe even self-defeating?
-                                                  -- TODO maybe even make a single-constructor w/ Int?
 
 -- we expose `startingCellOffset` for debugging correct behavior with overflow:
 newChanStarting :: Int -> IO (InChan a, OutChan a)
@@ -146,6 +144,7 @@ newChanStarting startingCellOffset = do
     liftA2 (,) (InChan savedEmptyTkt <$> end) (OutChan <$> end)
 
 
+-- TODO could we replace the mask_ with an exception-handler (would that be faster?)
 writeChan :: InChan a -> a -> IO ()
 writeChan c@(InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
     (segIx, str@(Stream _ segment _)) <- moveToNextCell ce
@@ -235,24 +234,21 @@ readChan (OutChan ce@(ChanEnd segSource _ _)) = mask_ $ do  -- NOTE [1]
 -- stream head pointer as needed), and returns the stream segment and relative
 -- index of our cell.
 moveToNextCell :: ChanEnd a -> IO (Int, Stream a)
+{-# INLINE moveToNextCell #-}
 moveToNextCell (ChanEnd segSource counter streamHead) = do
     str0@(Stream offset0 _ _) <- readIORef streamHead
     -- !!! TODO BARRIER REQUIRED FOR NON-X86 !!!
     ix <- incrCounter 1 counter
-    let go str@(Stream offset _ next) =
-          let !segIx = ix - offset
-           in assert (segIx >= 0) $ -- else cell is unreachable!
-              if segIx < sEGMENT_LENGTH
-                -- assigned cell is within this segment
-                then do 
-                  when (segIx == 0 && offset /= offset0) $  -- NOTE [2]
-                    writeIORef streamHead str 
-                  return (segIx , str)
-                else waitingAdvanceStream next offset segSource (rEADS_FOR_SEGMENT_CREATE_WAIT*segIx) -- NOTE [1]
-                      >>= go
-    -- TODO calculate number of strides ahead of time and pass, so no need to keep checking `offset`
-    --      pass a `differentHead` Bool set to false first (then True), replacing offset /= offset0 (maybe turn that into an assertion)
-    go str0
+    let !(!segsAway, !segIx) = (ix - offset0) `divMod` sEGMENT_LENGTH
+        waitSpins = rEADS_FOR_SEGMENT_CREATE_WAIT*segIx -- NOTE [1]
+        {-# INLINE go #-}
+        go 0 str = return str
+        go !n str@(Stream offset _ next) =
+            waitingAdvanceStream next offset segSource waitSpins
+              >>= go (n-1)
+    str <- go segsAway str0
+    when (segsAway > 0) $ writeIORef streamHead str -- NOTE [2]
+    return (segIx,str)
   -- [1] All readers or writers needing to work with a not-yet-created segment
   -- race to create it, but those past index 0 have progressively long waits; 20
   -- is chosen as 20 readIORefs should be more than enough time for writer/reader
