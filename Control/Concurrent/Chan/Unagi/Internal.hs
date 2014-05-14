@@ -115,9 +115,12 @@ data Cell a = Empty | Written a | Blocking (MVar a) | BlockedAborted -- TODO !(M
 --   - the larger this the larger one-time cost for the lucky reader/writer
 --   - as arrays collect in heap, performance will be destroyed:  
 --       http://stackoverflow.com/q/23462004/176841
+--
+-- NOTE: THIS REMAIN A POWER OF 2!
 sEGMENT_LENGTH :: Int
 {-# INLINE sEGMENT_LENGTH #-}
 sEGMENT_LENGTH = 1024 -- TODO Finalize this default.
+
 -- NOTE In general we'll have two segments allocated at any given time in
 -- addition to the segment template, so in the worst case, when the program
 -- exits we will have allocated ~ 3 segments extra memory than was actually
@@ -246,8 +249,8 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
     -- !!! TODO BARRIER REQUIRED FOR NON-X86 !!!
     ix <- incrCounter 1 counter
     let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
-                 --(ix - offset0) `quotRem` sEGMENT_LENGTH
                  divMod_sEGMENT_LENGTH $! (ix - offset0)
+              -- (ix - offset0) `quotRem` sEGMENT_LENGTH
         waitSpins = rEADS_FOR_SEGMENT_CREATE_WAIT*segIx -- NOTE [1]
         {-# INLINE go #-}
         go 0 str = return str
