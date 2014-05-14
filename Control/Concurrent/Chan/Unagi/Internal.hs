@@ -25,6 +25,8 @@ import qualified Data.Primitive as P
 import Control.Monad
 import Control.Applicative
 
+import Data.Bits
+
 -- TODO WRT GARBAGE COLLECTION
 --  This can lead to large amounts of memory use in theory:
 --   1. overhead of pre-allocated arrays and template
@@ -114,6 +116,7 @@ data Cell a = Empty | Written a | Blocking (MVar a) | BlockedAborted -- TODO !(M
 --   - as arrays collect in heap, performance will be destroyed:  
 --       http://stackoverflow.com/q/23462004/176841
 sEGMENT_LENGTH :: Int
+{-# INLINE sEGMENT_LENGTH #-}
 sEGMENT_LENGTH = 1024 -- TODO Finalize this default.
 -- NOTE In general we'll have two segments allocated at any given time in
 -- addition to the segment template, so in the worst case, when the program
@@ -242,7 +245,9 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
     str0@(Stream offset0 _ _) <- readIORef streamHead
     -- !!! TODO BARRIER REQUIRED FOR NON-X86 !!!
     ix <- incrCounter 1 counter
-    let !(!segsAway, !segIx) = (ix - offset0) `quotRem` sEGMENT_LENGTH
+    let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
+                 --(ix - offset0) `quotRem` sEGMENT_LENGTH
+                 divMod_sEGMENT_LENGTH $! (ix - offset0)
         waitSpins = rEADS_FOR_SEGMENT_CREATE_WAIT*segIx -- NOTE [1]
         {-# INLINE go #-}
         go 0 str = return str
@@ -346,6 +351,17 @@ catchKillRethrow io =
                throwIO (e :: SomeException) 
            ] 
 
+
+pOW, sEGMENT_LENGTH_MN_1 :: Int
+pOW = round $ logBase 2 $ fromIntegral sEGMENT_LENGTH -- or bit shifts in loop
+sEGMENT_LENGTH_MN_1 = sEGMENT_LENGTH - 1
+
+divMod_sEGMENT_LENGTH :: Int -> (Int,Int)
+{-# INLINE divMod_sEGMENT_LENGTH #-}
+-- divMod_sEGMENT_LENGTH n = ( n `unsafeShiftR` pOW, n .&. sEGMENT_LENGTH_MN_1)
+divMod_sEGMENT_LENGTH n = let d = n `unsafeShiftR` pOW
+                              m = n .&. sEGMENT_LENGTH_MN_1
+                           in d `seq` m `seq` (d,m)
 
 {- TESTS SKETCH
  - validate with some benchmarks
