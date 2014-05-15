@@ -25,6 +25,8 @@ import qualified Data.Primitive as P
 import Control.Monad
 import Control.Applicative
 
+import Data.Bits
+
 -- TODO WRT GARBAGE COLLECTION
 --  This can lead to large amounts of memory use in theory:
 --   1. overhead of pre-allocated arrays and template
@@ -56,10 +58,11 @@ import Control.Applicative
 --       see: https://ghc.haskell.org/trac/ghc/ticket/650#comment:17
 --    https://ghc.haskell.org/trac/ghc/ticket/650
 
+-- Number of reads on which to spin for new segment creation.
 -- Back-of-envelope (time_to_create_new_segment / time_for_read_IOref) + margin.
 -- See usage site.
-rEADS_FOR_SEGMENT_CREATE_WAIT :: Int
-rEADS_FOR_SEGMENT_CREATE_WAIT = round (((14.6::Float) + 0.3*fromIntegral sEGMENT_LENGTH) / 3.7) + 10
+nEW_SEGMENT_WAIT :: Int
+nEW_SEGMENT_WAIT = round (((14.6::Float) + 0.3*fromIntegral sEGMENT_LENGTH) / 3.7) + 10
 
 data InChan a = InChan !(Ticket (Cell a)) !(ChanEnd a)
 newtype OutChan a = OutChan (ChanEnd a)
@@ -113,8 +116,12 @@ data Cell a = Empty | Written a | Blocking (MVar a) | BlockedAborted -- TODO !(M
 --   - the larger this the larger one-time cost for the lucky reader/writer
 --   - as arrays collect in heap, performance will be destroyed:  
 --       http://stackoverflow.com/q/23462004/176841
+--
+-- NOTE: THIS REMAIN A POWER OF 2!
 sEGMENT_LENGTH :: Int
+{-# INLINE sEGMENT_LENGTH #-}
 sEGMENT_LENGTH = 1024 -- TODO Finalize this default.
+
 -- NOTE In general we'll have two segments allocated at any given time in
 -- addition to the segment template, so in the worst case, when the program
 -- exits we will have allocated ~ 3 segments extra memory than was actually
@@ -207,6 +214,7 @@ readChan (OutChan ce@(ChanEnd segSource _ _)) = mask_ $ do  -- NOTE [1]
                 -- read (i.e.  we beat writer to cell 0) then optimistically
                 -- set up the next segment first:
                 advanceStreamIfFirst segIx str segSource
+                 -- TODO consider using readMVar on GHC 7.8:
                 -- Block, waiting for the future writer. -- NOTE [2]
                 takeMVar v `onException` (
                   P.writeArray segment segIx BlockedAborted )  -- NOTE [3]
@@ -242,12 +250,13 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
     str0@(Stream offset0 _ _) <- readIORef streamHead
     -- !!! TODO BARRIER REQUIRED FOR NON-X86 !!!
     ix <- incrCounter 1 counter
-    let !(!segsAway, !segIx) = (ix - offset0) `quotRem` sEGMENT_LENGTH
-        waitSpins = rEADS_FOR_SEGMENT_CREATE_WAIT*segIx -- NOTE [1]
+    let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
+                 divMod_sEGMENT_LENGTH $! (ix - offset0)
+              -- (ix - offset0) `quotRem` sEGMENT_LENGTH
         {-# INLINE go #-}
         go 0 str = return str
-        go !n str@(Stream offset _ next) =
-            waitingAdvanceStream next offset segSource waitSpins
+        go !n (Stream offset _ next) =
+            waitingAdvanceStream next offset segSource (nEW_SEGMENT_WAIT*segIx) -- NOTE [1]
               >>= go (n-1)
     str <- go segsAway str0
     when (segsAway > 0) $ writeIORef streamHead str -- NOTE [2]
@@ -346,6 +355,17 @@ catchKillRethrow io =
                throwIO (e :: SomeException) 
            ] 
 
+
+pOW, sEGMENT_LENGTH_MN_1 :: Int
+pOW = round $ logBase 2 $ fromIntegral sEGMENT_LENGTH -- or bit shifts in loop
+sEGMENT_LENGTH_MN_1 = sEGMENT_LENGTH - 1
+
+divMod_sEGMENT_LENGTH :: Int -> (Int,Int)
+{-# INLINE divMod_sEGMENT_LENGTH #-}
+-- divMod_sEGMENT_LENGTH n = ( n `unsafeShiftR` pOW, n .&. sEGMENT_LENGTH_MN_1)
+divMod_sEGMENT_LENGTH n = let d = n `unsafeShiftR` pOW
+                              m = n .&. sEGMENT_LENGTH_MN_1
+                           in d `seq` m `seq` (d,m)
 
 {- TESTS SKETCH
  - validate with some benchmarks
