@@ -156,13 +156,14 @@ newChanStarting startingCellOffset = do
 writeChan :: InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
 writeChan c@(InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
-    (segIx, str@(Stream _ segment _)) <- moveToNextCell ce
+    (segIx, (Stream offset segment next)) <- moveToNextCell ce
  -- NOTE: at this point we have an obligation to the reader of the assigned
  -- cell and what follows must already have async exceptions masked:
     (success,nonEmptyTkt) <- casArrayElem segment segIx savedEmptyTkt (Written a)
     if success 
-         -- maybe optimistically try to set up next segment.
-        then advanceStreamIfFirst segIx str segSource
+         -- if we're writing to index 0, try to pre-allocate next segment:
+        then when (segIx == 0) $ void $
+               waitingAdvanceStream next offset segSource 0
         else case peekTicket nonEmptyTkt of
                   Blocking v -> putMVar v a
                   -- a reader was killed (async exception) such that if `a`
@@ -200,8 +201,8 @@ readChan :: OutChan a -> IO a
 -- TODO consider removing this mask_ (does result in a performance improvement)
 --      maybe providing an alternative function.
 {-# INLINE readChan #-}
-readChan (OutChan ce@(ChanEnd segSource _ _)) = mask_ $ do  -- NOTE [1]
-    (segIx, str@(Stream _ segment _)) <- moveToNextCell ce
+readChan (OutChan ce) = mask_ $ do  -- NOTE [1]
+    (segIx, (Stream _ segment _)) <- moveToNextCell ce
     cellTkt <- readArrayElem segment segIx
     case peekTicket cellTkt of
          Written a -> return a
@@ -210,10 +211,6 @@ readChan (OutChan ce@(ChanEnd segSource _ _)) = mask_ $ do  -- NOTE [1]
             (success,elseWrittenCell) <- casArrayElem segment segIx cellTkt (Blocking v)
             if success 
               then do 
-                -- if we're the first of the segment and about to do a blocking
-                -- read (i.e.  we beat writer to cell 0) then optimistically
-                -- set up the next segment first:
-                advanceStreamIfFirst segIx str segSource
                  -- TODO consider using readMVar on GHC 7.8:
                 -- Block, waiting for the future writer. -- NOTE [2]
                 takeMVar v `onException` (
@@ -271,11 +268,6 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
   -- *backwards* if the thread was descheduled, but that's not a correctness
   -- issue. TODO check we're not moving the head pointer backwards; maybe need a generation counter + handle overflow correctly.
 
-
-advanceStreamIfFirst :: Int -> Stream a -> SegSource a -> IO ()
-advanceStreamIfFirst segIx (Stream offset _ next) segSource = 
-    when (segIx == 0) $ void $
-        waitingAdvanceStream next offset segSource 0
 
 -- thread-safely try to fill `nextSegRef` at the next offset with a new
 -- segment, waiting some number of iterations (for other threads to handle it).
@@ -357,7 +349,7 @@ catchKillRethrow io =
 
 
 pOW, sEGMENT_LENGTH_MN_1 :: Int
-pOW = round $ logBase 2 $ fromIntegral sEGMENT_LENGTH -- or bit shifts in loop
+pOW = round $ logBase (2::Float) $ fromIntegral sEGMENT_LENGTH -- or bit shifts in loop
 sEGMENT_LENGTH_MN_1 = sEGMENT_LENGTH - 1
 
 divMod_sEGMENT_LENGTH :: Int -> (Int,Int)
