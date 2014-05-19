@@ -79,7 +79,6 @@ data ChanEnd a =
            -- an efficient producer of segments of length sEGMENT_LENGTH:
     ChanEnd !(SegSource a)
             -- Both Chan ends must start with the same counter value.
-            -- TODO maybe need a "generation" counter in case of crazy delayed thread (possible?)
             !AtomicCounter 
             -- the stream head; this must never point to a segment whose offset
             -- is greater than the counter value
@@ -97,9 +96,7 @@ type StreamSegment a = P.MutableArray RealWorld (Cell a)
 --     Empty   -> Written 
 --     Blocking
 --     BlockedAborted
-data Cell a = Empty | Written a | Blocking (MVar a) | BlockedAborted -- TODO !(Mvar a)
-                                                                     -- TODO !a (maybe make optional)
-                                                                     -- TODO ptr tagging? try combining these constructors
+data Cell a = Empty | Written a | Blocking !(MVar a) | BlockedAborted
 
 --   TODO:
 --     However, then we have to consider how more elements will be kept around,
@@ -128,6 +125,10 @@ sEGMENT_LENGTH = 1024 -- TODO Finalize this default.
 -- required.
 
 data Stream a = 
+           -- TODO we could actually store the offset once in stream head and keep track of it
+           --      and that might remove a layer of indirection, as we could
+           --      replace this with StreamSegment where the final segment is a
+           --      special Next cell
            -- the offset into the stream of this StreamSegment[0]
     Stream !Int 
            !(StreamSegment a)
@@ -171,21 +172,7 @@ writeChan c@(InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
                   -- semantics of Chan. Retry:
                   BlockedAborted -> writeChan c a
                   _ ->
-            -- Theoretical race condition: Writer reads head, then descheduled.
-            -- Millions of segments are allocated and counter incremented but
-            -- none manage to move the head pointer. When the counter comes
-            -- back around, the next writer assigned this count will write to
-            -- the cell we've been assigned and this error will be raised.
                       error "Nearly Impossible! Expected Blocking or BlockedAborted"
-        -- TODO A WORSE CASE: another descheduled thread from this same block
-        --      completes, moving the pointer way backwards.
-        -- HOW TO SOLVE?
-        --     We want to move the pointer forward only
-        --      - could use "generations"
-        --         - would we have to deal with this anywhere else?
-        --         - if not, then probably worth it.
-        --      - use heuristic, or just only move if within some forward window
-        --         maybe just subtract and only move if positive, then do?
   -- [2] the writer or reader which arrives first to the first cell of a new
   -- segment is tasked (somewhat arbitrarily) with trying to pre-allocate the
   -- *next* segment hopefully ahead of any readers or writers who might need
@@ -245,6 +232,7 @@ moveToNextCell :: ChanEnd a -> IO (Int, Stream a)
 {-# INLINE moveToNextCell #-}
 moveToNextCell (ChanEnd segSource counter streamHead) = do
     str0@(Stream offset0 _ _) <- readIORef streamHead
+    -- NOTE [3]
     -- !!! TODO BARRIER REQUIRED FOR NON-X86 !!!
     ix <- incrCounter 1 counter
     let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
@@ -256,6 +244,7 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
             waitingAdvanceStream next offset segSource (nEW_SEGMENT_WAIT*segIx) -- NOTE [1]
               >>= go (n-1)
     str <- go segsAway str0
+    -- TODO would a one-shot CAS be better here? Test.
     when (segsAway > 0) $ writeIORef streamHead str -- NOTE [2]
     return (segIx,str)
   -- [1] All readers or writers needing to work with a not-yet-created segment
@@ -266,7 +255,14 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
   -- [2] advancing the stream head pointer on segIx == sEGMENT_LENGTH - 1 would
   -- be more correct, but this is simpler here. This may move the head pointer
   -- *backwards* if the thread was descheduled, but that's not a correctness
-  -- issue. TODO check we're not moving the head pointer backwards; maybe need a generation counter + handle overflow correctly.
+  -- issue.
+  --
+  -- [3] There is a theoretical race condition here: thread reads head and is
+  -- descheduled, meanwhile other readers/writers increment counter one full
+  -- lap; when we increment we think we've found our cell in what is actually a
+  -- very old segment. However in this scenario all addressable memory will
+  -- have been consumed just by the array pointers whivh haven't been able to
+  -- be GC'd. So I don't think this is something to worry about.
 
 
 -- thread-safely try to fill `nextSegRef` at the next offset with a new
