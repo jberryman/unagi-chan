@@ -1,7 +1,8 @@
 {-# LANGUAGE BangPatterns , DeriveDataTypeable #-}
 module Control.Concurrent.Chan.Unagi.Internal (
      sEGMENT_LENGTH
-    , InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell(..), Stream(..), NextSegment(..)
+    , InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell(..), Stream(..)
+    , NextSegment(..), StreamHead(..)
     , newChanStarting, writeChan, readChan
     , throwKillTo, catchKillRethrow
     )
@@ -82,7 +83,9 @@ data ChanEnd a =
             !AtomicCounter 
             -- the stream head; this must never point to a segment whose offset
             -- is greater than the counter value
-            !(IORef (Stream a))
+            !(IORef (StreamHead a))
+
+data StreamHead a = StreamHead !Int !(Stream a)
 
 --TODO later see if we get a benefit from the small array primops in 7.10,
 --     which omit card-marking overhead and might have faster clone.
@@ -125,13 +128,7 @@ sEGMENT_LENGTH = 1024 -- TODO Finalize this default.
 -- required.
 
 data Stream a = 
-           -- TODO we could actually store the offset once in stream head and keep track of it
-           --      and that might remove a layer of indirection, as we could
-           --      replace this with StreamSegment where the final segment is a
-           --      special Next cell
-           -- the offset into the stream of this StreamSegment[0]
-    Stream !Int 
-           !(StreamSegment a)
+    Stream !(StreamSegment a)
            -- The next segment in the stream; new segments are allocated and
            -- put here as we go, with threads cooperating to allocate new
            -- segments:
@@ -148,8 +145,10 @@ newChanStarting startingCellOffset = do
     firstSeg <- segSource
     -- collect a ticket to save for writer CAS
     savedEmptyTkt <- readArrayElem firstSeg 0
-    stream <- Stream startingCellOffset firstSeg <$> newIORef NoSegment
-    let end = ChanEnd segSource <$> newCounter firstCount <*> newIORef stream
+    stream <- Stream firstSeg <$> newIORef NoSegment
+    let end = ChanEnd segSource 
+                  <$> newCounter firstCount 
+                  <*> newIORef (StreamHead startingCellOffset stream)
     liftA2 (,) (InChan savedEmptyTkt <$> end) (OutChan <$> end)
 
 
@@ -157,14 +156,14 @@ newChanStarting startingCellOffset = do
 writeChan :: InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
 writeChan c@(InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
-    (segIx, (Stream offset segment next)) <- moveToNextCell ce
+    (segIx, (Stream segment next)) <- moveToNextCell ce
  -- NOTE: at this point we have an obligation to the reader of the assigned
  -- cell and what follows must already have async exceptions masked:
     (success,nonEmptyTkt) <- casArrayElem segment segIx savedEmptyTkt (Written a)
     if success 
          -- if we're writing to index 0, try to pre-allocate next segment:
         then when (segIx == 0) $ void $
-               waitingAdvanceStream next offset segSource 0
+               waitingAdvanceStream next segSource 0
         else case peekTicket nonEmptyTkt of
                   Blocking v -> putMVar v a
                   -- a reader was killed (async exception) such that if `a`
@@ -189,7 +188,7 @@ readChan :: OutChan a -> IO a
 --      maybe providing an alternative function.
 {-# INLINE readChan #-}
 readChan (OutChan ce) = mask_ $ do  -- NOTE [1]
-    (segIx, (Stream _ segment _)) <- moveToNextCell ce
+    (segIx, (Stream segment _)) <- moveToNextCell ce
     cellTkt <- readArrayElem segment segIx
     case peekTicket cellTkt of
          Written a -> return a
@@ -231,7 +230,7 @@ readChan (OutChan ce) = mask_ $ do  -- NOTE [1]
 moveToNextCell :: ChanEnd a -> IO (Int, Stream a)
 {-# INLINE moveToNextCell #-}
 moveToNextCell (ChanEnd segSource counter streamHead) = do
-    str0@(Stream offset0 _ _) <- readIORef streamHead
+    (StreamHead offset0 str0) <- readIORef streamHead
     -- NOTE [3]
     -- !!! TODO BARRIER REQUIRED FOR NON-X86 !!!
     ix <- incrCounter 1 counter
@@ -240,12 +239,15 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
               -- (ix - offset0) `quotRem` sEGMENT_LENGTH
         {-# INLINE go #-}
         go 0 str = return str
-        go !n (Stream offset _ next) =
-            waitingAdvanceStream next offset segSource (nEW_SEGMENT_WAIT*segIx) -- NOTE [1]
+        go !n (Stream _ next) =
+            waitingAdvanceStream next segSource (nEW_SEGMENT_WAIT*segIx) -- NOTE [1]
               >>= go (n-1)
     str <- go segsAway str0
     -- TODO would a one-shot CAS be better here? Test.
-    when (segsAway > 0) $ writeIORef streamHead str -- NOTE [2]
+    when (segsAway > 0) $ do
+        let !offsetN = 
+              offset0 + (segsAway `unsafeShiftL` pOW) --(segsAway*sEGMENT_LENGTH)
+        writeIORef streamHead $ StreamHead offsetN str -- NOTE [2]
     return (segIx,str)
   -- [1] All readers or writers needing to work with a not-yet-created segment
   -- race to create it, but those past index 0 have progressively long waits; 20
@@ -268,9 +270,9 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
 -- thread-safely try to fill `nextSegRef` at the next offset with a new
 -- segment, waiting some number of iterations (for other threads to handle it).
 -- Returns nextSegRef's StreamSegment.
-waitingAdvanceStream :: IORef (NextSegment a) -> Int -> SegSource a 
+waitingAdvanceStream :: IORef (NextSegment a) -> SegSource a 
                      -> Int -> IO (Stream a)
-waitingAdvanceStream nextSegRef prevOffset segSource = go where
+waitingAdvanceStream nextSegRef segSource = go where
   go !wait = assert (wait >= 0) $ do
     tk <- readForCAS nextSegRef
     case peekTicket tk of
@@ -278,9 +280,8 @@ waitingAdvanceStream nextSegRef prevOffset segSource = go where
            | wait > 0 -> go (wait - 1)
              -- Create a potential next segment and try to insert it:
            | otherwise -> do 
-               potentialStrNext <- Stream (prevOffset + sEGMENT_LENGTH) 
-                                      <$> segSource 
-                                      <*> newIORef NoSegment
+               potentialStrNext <- Stream <$> segSource 
+                                          <*> newIORef NoSegment
                (_,tkDone) <- casIORef nextSegRef tk (Next potentialStrNext)
                -- If that failed another thread succeeded (no false negatives)
                case peekTicket tkDone of

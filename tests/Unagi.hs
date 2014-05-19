@@ -60,7 +60,7 @@ correctFirstWrite :: Int -> IO ()
 correctFirstWrite n = do
     (i,UI.OutChan (UI.ChanEnd _ _ arrRef)) <- UI.newChanStarting n
     writeChan i ()
-    (UI.Stream _ arr _) <- readIORef arrRef
+    (UI.StreamHead _ (UI.Stream arr _)) <- readIORef arrRef
     cell <- P.readArray arr 0
     case cell of
          UI.Written () -> return ()
@@ -73,7 +73,7 @@ correctInitialWrites startN = do
     (i,o@(UI.OutChan (UI.ChanEnd _ _ arrRef))) <- UI.newChanStarting startN
     let writes = [0..UI.sEGMENT_LENGTH]
     mapM_ (writeChan i) writes
-    (UI.Stream _ arr next) <- readIORef arrRef
+    (UI.StreamHead _ (UI.Stream arr next)) <- readIORef arrRef
     -- check all of first segment:
     forM_ (init writes) $ \ix-> do
         cell <- P.readArray arr ix
@@ -85,7 +85,7 @@ correctInitialWrites startN = do
     -- check last write:
     lastSeg  <- readIORef next
     case lastSeg of
-         (UI.Next (UI.Stream offs arr2 next2)) -> do
+         (UI.Next (UI.Stream arr2 next2)) -> do
             cell <- P.readArray arr2 0
             case cell of
                  UI.Written n 
@@ -95,7 +95,7 @@ correctInitialWrites startN = do
             -- check pre-allocation:
             n2 <- readIORef next2
             case n2 of 
-                (UI.Next (UI.Stream _ _ next3)) -> do
+                (UI.Next (UI.Stream _ next3)) -> do
                     n3 <- readIORef next3
                     case n3 of
                         UI.NoSegment -> return ()
