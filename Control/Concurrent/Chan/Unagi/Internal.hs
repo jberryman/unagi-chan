@@ -152,35 +152,29 @@ newChanStarting startingCellOffset = do
     liftA2 (,) (InChan savedEmptyTkt <$> end) (OutChan <$> end)
 
 
--- TODO could we replace the mask_ with an exception-handler (would that be faster?)
 writeChan :: InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
 writeChan c@(InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
     (segIx, (Stream segment next)) <- moveToNextCell ce
- -- NOTE: at this point we have an obligation to the reader of the assigned
- -- cell and what follows must already have async exceptions masked:
     (success,nonEmptyTkt) <- casArrayElem segment segIx savedEmptyTkt (Written a)
-    if success 
-         -- if we're writing to index 0, try to pre-allocate next segment:
-        then when (segIx == 0) $ void $
-               waitingAdvanceStream next segSource 0
-        else case peekTicket nonEmptyTkt of
-                  Blocking v -> putMVar v a
-                  -- a reader was killed (async exception) such that if `a`
-                  -- disappeared this might be observed to differ from the
-                  -- semantics of Chan. Retry:
-                  BlockedAborted -> writeChan c a
-                  _ ->
-                      error "Nearly Impossible! Expected Blocking or BlockedAborted"
-  -- [2] the writer or reader which arrives first to the first cell of a new
-  -- segment is tasked (somewhat arbitrarily) with trying to pre-allocate the
-  -- *next* segment hopefully ahead of any readers or writers who might need
-  -- it. This will race with any reader or writer that tries to read the next
-  -- segment and finds it's empty; when this wins (hopefully the vast majority
-  -- of the time) we avoid a throughput hit.
-  --
-  -- [1] Reader may have not set up the next segment, but we don't try here in
-  -- the writer, even if segIx == 0
+    -- try to pre-allocate next segment; NOTE [1]
+    when (segIx == 0) $ void $
+      waitingAdvanceStream next segSource 0
+    when (not success) $
+        case peekTicket nonEmptyTkt of
+             Blocking v -> putMVar v a
+             -- a reader was killed (async exception) such that if `a`
+             -- disappeared this might be observed to differ from the
+             -- semantics of Chan. Retry:
+             BlockedAborted -> writeChan c a
+             _ ->
+                 error "Nearly Impossible! Expected Blocking or BlockedAborted"
+  -- [1] the writer which arrives first to the first cell of a new segment is
+  -- tasked (somewhat arbitrarily) with trying to pre-allocate the *next*
+  -- segment hopefully ahead of any readers or writers who might need it. This
+  -- will race with any reader *or* writer that tries to read the next segment
+  -- and finds it's empty (see `waitingAdvanceStream`); when this wins
+  -- (hopefully the vast majority of the time) we avoid a throughput hit.
 
 
 readChan :: OutChan a -> IO a
@@ -299,8 +293,6 @@ type SegSource a = IO (StreamSegment a)
 newSegmentSource :: IO (SegSource a)
 {-# INLINE newSegmentSource #-}
 newSegmentSource = do
-    -- TODO check that Empty is actually shared (or however that works with
-    --      single-constructors)
     arr <- P.newArray sEGMENT_LENGTH Empty
     return (P.cloneMutableArray arr 0 sEGMENT_LENGTH)
 
