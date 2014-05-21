@@ -19,10 +19,6 @@ unagiMain = do
                   ++ [minBound .. (minBound + UI.sEGMENT_LENGTH + 1)]
     putStrLn "OK"
     -- ------
-    putStr "Testing special async exception handling in blocked reader... "
-    replicateM_ 100 $ testBlockedRecovery
-    putStrLn "OK"
-    -- ------
     putStr "Correct first write... "
     mapM_ correctFirstWrite [ (maxBound - 7), maxBound, minBound, 0]
     putStrLn "OK"
@@ -121,18 +117,3 @@ testBlockedRecovery = do
     -- the message and raising BlockedIndefinitely here:
     readChan o
 -}
--- THIS IS A BIT REDUNDANT (see Chan002), but keep for now.
--- we make sure that we can't observe a message disappearing when we kill a
--- blocked reader with our special throw function and then do a write.
-testBlockedRecovery = do
-    (i,o) <- newChan
-    v <- newEmptyMVar
-    rid <- forkIO $ UI.catchKillRethrow $ (putMVar v () >> readChan o)
-    takeMVar v
-    threadDelay 1000
-    UI.throwKillTo rid
-    -- we race the exception-handler in `readChan` here...
-    writeChan i ()
-    -- In a buggy implementation, this would consistently win failing by losing
-    -- the message and raising BlockedIndefinitely here:
-    readChan o
