@@ -11,7 +11,6 @@ module Control.Concurrent.Chan.Unagi.Internal (
 
 import Control.Concurrent.MVar
 import Data.IORef
--- import Control.Exception(mask_,assert,onException,throwIO,SomeException,Exception)
 import Control.Exception
 
 import Control.Monad.Primitive(RealWorld)
@@ -29,31 +28,13 @@ import Data.Bits
 --   1. overhead of pre-allocated arrays and template
 --   2. already-read elements in arrays not-yet GC'd
 --   3. array and element overhead from a writer/reader delayed (many intermediate chunks)
+--
 -- Ideas:
---   - StablePtr can be freed manually. Does it allow array to be freed too?
---      but see: https://ghc.haskell.org/trac/ghc/ticket/7670
---   - does a single-constructor occurrence point to the same bit of memory?
---      (i.e. no element overhead for writing `Empty` or something?)
 --   - hold weak reference to previous segment, and when we move the head
 --     pointer, update `next` to point to this new segment (if it is still
 --     around?)
--- TODO performance
---   - eliminate some indirection, by replacing IORefs with Arrays of Arrays
---   - replace constructors with ints, try to stuff things into unboxed references as much as possible
---
--- TODO Custom fancy CMM wizardry
---  Maybe some fancy, custom CMM for array writes and reads:
---    - write (or CAS, I suppose) wouldn't need to check array size to find card table (because we know sEGMENT_LENGTH)
---    - write might not need to mark cards at all (since all elements are sharing a cheap value before write)
---    - instead we want reader to possibly do that
---       - read might only do a single card marking *after* filling the correspinding segment of e.g. 128 elems
---       - or is there some sort of "block write" for boxed arrays (copyArray?) that could be used after advancing past a certain point which would trigger a card marking?
---          - PROBLEM: other readers behind us may not have read their value yet.
---          - what about the read that *ends* a cards block marks that card?
---    - or can we just make smaller size arrays and turn off cardmarking on write?
---    - But GC still has to traverse card bytes; can we redefine array (or newArray primop) so that it has no/fewer card bits? 
---       see: https://ghc.haskell.org/trac/ghc/ticket/650#comment:17
---    https://ghc.haskell.org/trac/ghc/ticket/650
+--   - have reader write undefined after read or make Written unboxed and strict
+
 
 -- Number of reads on which to spin for new segment creation.
 -- Back-of-envelope (time_to_create_new_segment / time_for_read_IOref) + margin.
@@ -328,7 +309,6 @@ sEGMENT_LENGTH_MN_1 = sEGMENT_LENGTH - 1
 
 divMod_sEGMENT_LENGTH :: Int -> (Int,Int)
 {-# INLINE divMod_sEGMENT_LENGTH #-}
--- divMod_sEGMENT_LENGTH n = ( n `unsafeShiftR` pOW, n .&. sEGMENT_LENGTH_MN_1)
 divMod_sEGMENT_LENGTH n = let d = n `unsafeShiftR` pOW
                               m = n .&. sEGMENT_LENGTH_MN_1
                            in d `seq` m `seq` (d,m)
