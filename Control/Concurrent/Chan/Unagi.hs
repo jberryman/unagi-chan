@@ -5,34 +5,11 @@ module Control.Concurrent.Chan.Unagi (
     -- * Channel operations
     -- ** Reading
     , readChan
+    , readChanOnException
     , getChanContents
     -- ** Writing
     , writeChan
     , writeList2Chan
-
-    -- * Async Exceptions Note
-{- |
- There is a race condition in which a @throwTo known_blocked_reader_thread
-e@ followed immediately by a 'writeChan' can cause the write to be lost;
-i.e.  results in semantics equivalent to an asynchronous @throwTo@. 
-
-When an async exception is raised in a thread blocked on a 'readChan' a race
-condition is created in which the element of the next 'writeChan' may be lost.
-Practically speaking this means that a thread @A@ raising an exception with
-'throwTo' in thread @B@, where thread @B@ is in the process of a read on a
-known-empty chan, may observe semantics that differ from
-@Control.Concurrent.Chan@. Here is an example scenario:
-
->   (i,o) <- newChan
->   rid <- forkIO (readChan o)
->   throwTo rid ThreadKilled
->   writeChan i () -- this () may be lost
->   readChan o     -- ...and this may block indefinitely
-
-In these cases 'throwTo' can be thought of as asynchronous, and the user should
-implement their own exception type and handler (which might e.g. use @Mvar@ for
-synchronization).
- -}
     ) where
 
 import Control.Concurrent.Chan.Unagi.Internal
@@ -41,8 +18,8 @@ import System.IO.Unsafe ( unsafeInterleaveIO )
 
 
 newChan :: IO (InChan a, OutChan a)
-newChan = newChanStarting (maxBound - 10) -- lets us test counter overflow in tests
---newChan = newChanStarting minBound
+newChan = newChanStarting (maxBound - 10) 
+    -- lets us test counter overflow in tests and normal course of operation
 
 -- | Return a lazy list representing the contents of the supplied OutChan, much
 -- like System.IO.hGetContents.

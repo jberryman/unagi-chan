@@ -3,20 +3,16 @@ module Control.Concurrent.Chan.Unagi.Internal (
      sEGMENT_LENGTH
     , InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell(..), Stream(..)
     , NextSegment(..), StreamHead(..)
-    , newChanStarting, writeChan, readChan
-    , throwKillTo, catchKillRethrow
+    , newChanStarting, writeChan, readChan, readChanOnException
     )
     where
 
 -- Internals exposed for testing.
 
 import Control.Concurrent.MVar
-import Control.Concurrent(ThreadId)
 import Data.IORef
 -- import Control.Exception(mask_,assert,onException,throwIO,SomeException,Exception)
 import Control.Exception
-import qualified Control.Exception as E
-import Data.Typeable
 
 import Control.Monad.Primitive(RealWorld)
 import Data.Atomics.Counter
@@ -99,7 +95,7 @@ type StreamSegment a = P.MutableArray RealWorld (Cell a)
 --     Empty   -> Written 
 --     Blocking
 --     BlockedAborted
-data Cell a = Empty | Written a | Blocking !(MVar a) | BlockedAborted
+data Cell a = Empty | Written a | Blocking !(MVar a)
 
 --   TODO:
 --     However, then we have to consider how more elements will be kept around,
@@ -152,9 +148,11 @@ newChanStarting startingCellOffset = do
     liftA2 (,) (InChan savedEmptyTkt <$> end) (OutChan <$> end)
 
 
+-- TODO add benchmark that does a mapM_ (writeChan c), and test whether moving \a-> to RHS helps w/ inlining
+-- TODO add benchmark that sends and uses Ints to test whether unboxed-strict elements in Cell help
 writeChan :: InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
-writeChan c@(InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
+writeChan (InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
     (segIx, (Stream segment next)) <- moveToNextCell ce
     (success,nonEmptyTkt) <- casArrayElem segment segIx savedEmptyTkt (Written a)
     -- try to pre-allocate next segment; NOTE [1]
@@ -166,9 +164,7 @@ writeChan c@(InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
              -- a reader was killed (async exception) such that if `a`
              -- disappeared this might be observed to differ from the
              -- semantics of Chan. Retry:
-             BlockedAborted -> writeChan c a
-             _ ->
-                 error "Nearly Impossible! Expected Blocking or BlockedAborted"
+             _ -> error "Nearly Impossible! Expected Blocking"
   -- [1] the writer which arrives first to the first cell of a new segment is
   -- tasked (somewhat arbitrarily) with trying to pre-allocate the *next*
   -- segment hopefully ahead of any readers or writers who might need it. This
@@ -177,11 +173,20 @@ writeChan c@(InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
   -- (hopefully the vast majority of the time) we avoid a throughput hit.
 
 
-readChan :: OutChan a -> IO a
--- TODO consider removing this mask_ (does result in a performance improvement)
---      maybe providing an alternative function.
-{-# INLINE readChan #-}
-readChan (OutChan ce) = mask_ $ do  -- NOTE [1]
+-- We would like our queue to behave like Chan in that an async exception
+-- raised in a reader known to be blocked or about to block on an empty queue
+-- never results in a lost message; this matches our simple intuition about the
+-- mechanics of a queue: if you're last in line for a cupcake and have to leave
+-- you wouldn't expect the cake that would have gone to you to disappear.
+--
+-- But there are other systems that a busy cake shop might use that you could
+-- easily imagine resulting in a lost cake, and that's a different question
+-- from whether cakes are given to well-behaved customers in the order they
+-- came out of the oven, or whether a customer leaving at the wrong moment
+-- might cause the cake shop to burn down...
+readChanOnExceptionUnmasked :: (IO a -> IO ()) -> OutChan a -> IO a
+{-# INLINE readChanOnExceptionUnmasked #-}
+readChanOnExceptionUnmasked h = \(OutChan ce)-> do
     (segIx, (Stream segment _)) <- moveToNextCell ce
     cellTkt <- readArrayElem segment segIx
     case peekTicket cellTkt of
@@ -192,31 +197,37 @@ readChan (OutChan ce) = mask_ $ do  -- NOTE [1]
             if success 
               then do 
                  -- TODO consider using readMVar on GHC 7.8:
-                -- Block, waiting for the future writer. -- NOTE [2]
+                -- Block, waiting for the future writer.
                 takeMVar v `onException` (
-                  P.writeArray segment segIx BlockedAborted )  -- NOTE [3]
+                  h (takeMVar v) )
               -- In the meantime a writer has written. Good!
               else case peekTicket elseWrittenCell of
                         Written a -> return a
                         _ -> error "Impossible! Expecting Written"
          _ -> error "Impossible! Only expecting Empty or Written"
-  -- [1] we want our queue to behave like Chan in that (reasoning in terms of
-  -- linearizability) the first reader waiting in line for an element may lose
-  -- that element for good when an async exception is raised (when the read and
-  -- write overlap); but an async exception raised in a reader "blocked in
-  -- line" (i.e. which blocked after the first blocked reader) should never
-  -- result in a lost message.  To that end we mask this, and on exception while
-  -- blocking we write `BlockedAborted`, signaling writer to retry.
-  --
-  -- [2] When a reader is blocked and an async exception is raised we risk losing
-  -- the next written element. To avoid this our handler writes BlockedAborted to
-  -- signal the next writer to retry. Unfortunately we can't force a `throwTo` to
-  -- block until our handler *finishes* (see trac #9030) thus introducing a race
-  -- condition that could cause a thread to observe different semantics to Chan.
-  --
-  -- [3] re. writeArray race condition: if read overlaps with write, this is
-  -- undefined behavior anyway:
 
+
+-- | Read an element from the chan, blocking if the chan is empty.
+--
+-- /Note re. exceptions/: When an async exception is raised during a @readChan@ 
+-- the message that the read would have returned is likely to be lost, even when
+-- the read is known to be blocked on an empty queue. If you need to handle
+-- this scenario, you can use 'readChanOnException'.
+readChan :: OutChan a -> IO a
+{-# INLINE readChan #-}
+readChan = readChanOnExceptionUnmasked void
+
+-- | Like 'readChan' but allows recovery of the queue element which would have
+-- been read, in the case that an async exception is raised during the read. To
+-- be precise exceptions are raised, and the handler run, only when
+-- @readChanOnException@ is blocking on an empty queue.
+--
+-- The second argument is a handler that takes a blocking IO action returning
+-- the element, and performs some recovery action.  When the handler is called,
+-- the passed @IO a@ is the only way to access the element.
+readChanOnException :: OutChan a -> (IO a -> IO ()) -> IO a
+{-# INLINE readChanOnException #-}
+readChanOnException c h = mask_ $ readChanOnExceptionUnmasked h c
 
 -- increments counter, finds stream segment of corresponding cell (updating the
 -- stream head pointer as needed), and returns the stream segment and relative
@@ -291,7 +302,6 @@ waitingAdvanceStream nextSegRef segSource = go where
 type SegSource a = IO (StreamSegment a)
 
 newSegmentSource :: IO (SegSource a)
-{-# INLINE newSegmentSource #-}
 newSegmentSource = do
     arr <- P.newArray sEGMENT_LENGTH Empty
     return (P.cloneMutableArray arr 0 sEGMENT_LENGTH)
@@ -310,31 +320,6 @@ newSegmentSource = do
 -- ----------
 
 
-
--- JUST FOR DEBUGGING / TESTING FOR NOW --
-
-
-newtype ThreadKilledChan = ThreadKilledChan (MVar ())
-    deriving (Typeable)
-instance Show ThreadKilledChan where
-    show _ = "ThreadKilledChan"
-instance Exception ThreadKilledChan
-
-throwKillTo :: ThreadId -> IO ()
-throwKillTo tid = do
-    v <- newEmptyMVar
-    throwTo tid (ThreadKilledChan v)
-    takeMVar v
-
-catchKillRethrow :: IO a -> IO a
-catchKillRethrow io = 
-   io `E.catches` [
-             Handler $ \(ThreadKilledChan bvar)-> do
-               putMVar bvar () -- unblocking thrower
-               throwIO ThreadKilled
-           , Handler $ \e-> do
-               throwIO (e :: SomeException) 
-           ] 
 
 
 pOW, sEGMENT_LENGTH_MN_1 :: Int
