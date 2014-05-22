@@ -19,33 +19,31 @@ flag dev
   default: False
   manual: True
 
-
 library
+  hs-source-dirs: src
   exposed-modules:     Control.Concurrent.Chan.Split
                      , Control.Concurrent.Chan.Split.Internal
                      , Control.Concurrent.Chan.Unagi
   other-modules:       Control.Concurrent.Chan.Unagi.Internal
-  ghc-options:        -Wall
-  ghc-prof-options:   -fprof-auto
+  ghc-options:        -Wall -funbox-strict-fields
   build-depends:       base
                      , atomic-primops==0.6.0.5
                      , primitive>=0.5.3
   default-language:    Haskell2010
 
 
--- TODO  Benchmarks: (see chan-benchmarks)
 -- TODO  possibly have a different Main.hs for each Chan type, but then use different test-suites which set a var to decide which to import.
 test-suite test
   type: exitcode-stdio-1.0
+  ghc-options: -Wall -funbox-strict-fields
   ghc-options: -O2  -rtsopts  -threaded -with-rtsopts=-N
   ghc-options: -fno-ignore-asserts
-   -- for stack traces:
---ghc-options: -prof -auto-all -caf-all -with-rtsopts=-xc  
-  hs-source-dirs: tests, ./
+  -- I guess we need to put 'src' here to get access to Internal modules
+  hs-source-dirs: tests, src
   main-is: Main.hs
   build-depends:       base
-                     , atomic-primops==0.6.0.5
-                     , primitive>=0.5.3
+                     , primitive
+                     , atomic-primops
   default-language:    Haskell2010
 
 
@@ -67,11 +65,10 @@ executable dev-example
   --Relevant profiling RTS settings:  -xt
   -- TODO also check out +RTS -A10m, and look at output of -sstderr
 
-  hs-source-dirs: core-example, ./
+  hs-source-dirs: core-example
   main-is: Main.hs
   build-depends:       base
                      , stm
-                     , atomic-primops==0.6.0.5
-                     , primitive>=0.5.3
+                     , chan-split-fast
   default-language:    Haskell2010
 
