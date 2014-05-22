@@ -70,34 +70,31 @@ type StreamSegment a = P.MutableArray RealWorld (Cell a)
 
 -- TRANSITIONS and POSSIBLE VALUES:
 --   During Read:
---     Empty   -> Blocking  (-> BlockedAborted)
+--     Empty   -> Blocking
 --     Written
 --   During Write:
 --     Empty   -> Written 
 --     Blocking
---     BlockedAborted
 data Cell a = Empty | Written a | Blocking !(MVar a)
+-- TODO test these on NxN concurrent benchmarks, with an Int payload
+--  - change in readChanOnException
+--     Written a -> P.writeArray segment segIx undefined >> return a
+--  - making Written unboxed/strict
 
---   TODO:
---     However, then we have to consider how more elements will be kept around,
---     unable to be GC'd until we move onto the next segment. Solutions
---       - make read also CAS the element back to Empty (downside: slower reads)
---       - make the write strict to avoid some space-leaks at least 
---         - similarly, having Cell be an unboxed strict field.
---       - re-write writeArray CMM to avoid card-marking for a 'writeArray undefined'.
---
+
 -- Constant for now: back-of-envelope considerations:
 --   - making most of constant factor for cloning array of *any* size
 --   - make most of overheads of moving to the next segment, etc.
 --   - provide enough runway for creating next segment when 32 simultaneous writers 
---   - the larger this the larger one-time cost for the lucky reader/writer
---   - as arrays collect in heap, performance will be destroyed:  
+--   - the larger this the larger one-time cost for the lucky writer
+--   - as arrays collect in heap, performance might suffer, so bigger arrays
+--     give us a constant factor edge there. see:
 --       http://stackoverflow.com/q/23462004/176841
 --
--- NOTE: THIS REMAIN A POWER OF 2!
 sEGMENT_LENGTH :: Int
 {-# INLINE sEGMENT_LENGTH #-}
-sEGMENT_LENGTH = 1024 -- TODO Finalize this default.
+sEGMENT_LENGTH = 1024 -- NOTE: THIS REMAIN A POWER OF 2!
+-- TODO Finalize this default.
 
 -- NOTE In general we'll have two segments allocated at any given time in
 -- addition to the segment template, so in the worst case, when the program
@@ -134,8 +131,8 @@ newChanStarting startingCellOffset = do
 writeChan :: InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
 writeChan (InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
-    (segIx, (Stream segment next)) <- moveToNextCell ce
-    (success,nonEmptyTkt) <- casArrayElem segment segIx savedEmptyTkt (Written a)
+    (segIx, (Stream seg next)) <- moveToNextCell ce
+    (success,nonEmptyTkt) <- casArrayElem seg segIx savedEmptyTkt (Written a)
     -- try to pre-allocate next segment; NOTE [1]
     when (segIx == 0) $ void $
       waitingAdvanceStream next segSource 0
@@ -168,19 +165,20 @@ writeChan (InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
 readChanOnExceptionUnmasked :: (IO a -> IO ()) -> OutChan a -> IO a
 {-# INLINE readChanOnExceptionUnmasked #-}
 readChanOnExceptionUnmasked h = \(OutChan ce)-> do
-    (segIx, (Stream segment _)) <- moveToNextCell ce
-    cellTkt <- readArrayElem segment segIx
+    (segIx, (Stream seg _)) <- moveToNextCell ce
+    cellTkt <- readArrayElem seg segIx
     case peekTicket cellTkt of
          Written a -> return a
          Empty -> do
+            -- TODO maybe spin some number of times before blocking
             v <- newEmptyMVar
-            (success,elseWrittenCell) <- casArrayElem segment segIx cellTkt (Blocking v)
+            (success,elseWrittenCell) <- casArrayElem seg segIx cellTkt (Blocking v)
             if success 
-              then do 
+              then 
                  -- TODO consider using readMVar on GHC 7.8:
                 -- Block, waiting for the future writer.
                 takeMVar v `onException` (
-                  h (takeMVar v) )
+                  h $ takeMVar v )
               -- In the meantime a writer has written. Good!
               else case peekTicket elseWrittenCell of
                         Written a -> return a
@@ -274,7 +272,6 @@ waitingAdvanceStream nextSegRef segSource = go where
                  Next strNext -> return strNext
                  _ -> error "Impossible! This should only have been Next segment"
          Next strNext -> return strNext
-  -- TODO clean up and need some tests / assertions
 
 
 -- copying a template array with cloneMutableArray is much faster than creating
