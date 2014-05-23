@@ -1,5 +1,5 @@
+{-# LANGUAGE BangPatterns #-}
 module Main where
-
 
 import qualified Control.Concurrent.Chan.Unagi as U
 #ifdef COMPARE_BENCHMARKS
@@ -58,6 +58,8 @@ main = do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
                   mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (U.readChan fill_empty_fastUO) >> putMVar done1 ()) $ zip starts dones
                   mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
+
+              , bench "async Int writer, main thread read and sum" $ nfIO $ asyncSumIntUnagi n
               ]
 #ifdef COMPARE_BENCHMARKS
         , bgroup "Chan" $
@@ -127,6 +129,16 @@ asyncReadsWritesUnagi writers readers n = do
   rcvrs <- replicateM readers $ async $ replicateM_ (nNice `quot` readers) $ U.readChan o
   _ <- replicateM writers $ async $ replicateM_ (nNice `quot` writers) $ U.writeChan i ()
   mapM_ wait rcvrs
+
+-- A slightly more realistic benchmark, lets us see effects of unboxed strict
+-- in value, and inlining effects w/ partially applied writeChan
+asyncSumIntUnagi :: Int -> IO Int
+asyncSumIntUnagi n = do
+   (i,o) <- U.newChan
+   let readerSum  0  !tot = return tot
+       readerSum !n' !tot = U.readChan o >>= (readerSum (n'-1) . (tot+))
+   _ <- async $ mapM_ (U.writeChan i) [1..n] -- NOTE: partially-applied writeChan
+   readerSum n 0
 
 
 #ifdef COMPARE_BENCHMARKS
