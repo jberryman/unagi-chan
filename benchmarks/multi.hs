@@ -38,7 +38,13 @@ main = do
               -- this gives us a measure of effects of contention between
               -- readers and writers when compared with single-threaded
               -- version:
-              [ bench "async 1 writers 1 readers" $ runtestSplitChanUAsync 1 1 n
+              [ bench "async 1 writers 1 readers" $ asyncReadsWritesUnagi 1 1 n
+              -- This is measuring the effects of bottlenecks caused by
+              -- descheduling, context-switching overhead (forced by
+              -- fairness properties in the case of MVar), as well as
+              -- all of the above; this is probably less than
+              -- informative. Try threadscope on a standalone test:
+              , bench "async 100 writers 100 readers" $ asyncReadsWritesUnagi 100 100 n
               -- NOTE: this is a bit hackish, filling in one test and
               -- reading in the other; make sure memory usage isn't
               -- influencing mean:
@@ -52,11 +58,11 @@ main = do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
                   mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (U.readChan fill_empty_fastUO) >> putMVar done1 ()) $ zip starts dones
                   mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
-              , bench "contention: async 100 writers 100 readers" $ runtestSplitChanUAsync 100 100 n
               ]
 #ifdef COMPARE_BENCHMARKS
         , bgroup "Chan" $
-              [ bench "async 1 writer 1 readers" $ runtestChanAsync 1 1 n
+              [ bench "async 1 writer 1 readers" $ asyncReadsWritesChan 1 1 n
+              , bench "async 100 writers 100 readers" $ asyncReadsWritesChan 100 100 n
               , bench ("async "++(show procs)++" writers") $ do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
                   mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (writeChan fill_empty_chan ()) >> putMVar done1 ()) $ zip starts dones
@@ -66,15 +72,10 @@ main = do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
                   mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (readChan fill_empty_chan) >> putMVar done1 ()) $ zip starts dones
                   mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
-              -- This is measuring the effects of bottlenecks caused by
-              -- descheduling, context-switching overhead (forced by
-              -- fairness properties in the case of MVar), as well as
-              -- all of the above; this is probably less than
-              -- informative. Try threadscope on a standalone test:
-              , bench "contention: async 100 writers 100 readers" $ runtestChanAsync 100 100 n
               ]
         , bgroup "TQueue" $
-              [ bench "async 1 writers 1 readers" $ runtestTQueueAsync 1 1 n
+              [ bench "async 1 writers 1 readers" $ asyncReadsWritesTQueue 1 1 n
+              , bench "async 100 writers 100 readers" $ asyncReadsWritesTQueue 100 100 n
               -- This measures writer/writer contention:
               , bench ("async "++(show procs)++" writers") $ do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
@@ -85,11 +86,11 @@ main = do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
                   mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (atomically $ readTQueue fill_empty_tqueue) >> putMVar done1 ()) $ zip starts dones
                   mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
-              , bench "contention: async 100 writers 100 readers" $ runtestTQueueAsync 100 100 n
               ]
         {-
         , bgroup "TBQueue" $
-              [ bench "async 1 writers 1 readers" $ runtestTBQueueAsync 1 1 n
+              [ bench "async 1 writers 1 readers" $ asyncReadsWritesTBQueue 1 1 n
+              , bench "async 100 writers 100 readers" $ asyncReadsWritesTBQueue 100 100 n
               -- This measures writer/writer contention:
               , bench ("async "++(show procs)++" writers") $ do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
@@ -100,11 +101,11 @@ main = do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
                   mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (atomically $ readTBQueue fill_empty_tbqueue) >> putMVar done1 ()) $ zip starts dones
                   mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
-              , bench "contention: async 100 writers 100 readers" $ runtestTBQueueAsync 100 100 n
               ]
         -- michael-scott queue implementation, using atomic-primops
         , bgroup "lockfree-queue" $
-              [ bench "async 1 writer 1 readers" $ runtestLockfreeQueueAsync 1 1 n
+              [ bench "async 1 writer 1 readers" $ asyncReadsWritesLockfree 1 1 n
+              , bench "async 100 writers 100 readers" $ asyncReadsWritesLockfree 100 100 n
               , bench ("async "++(show procs)++" writers") $ do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
                   mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (MS.pushL fill_empty_lockfree ()) >> putMVar done1 ()) $ zip starts dones
@@ -113,15 +114,14 @@ main = do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
                   mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (msreadR fill_empty_lockfree) >> putMVar done1 ()) $ zip starts dones
                   mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
-              , bench "contention: async 100 writers 100 readers" $ runtestLockfreeQueueAsync 100 100 n
               ]
          -}
 #endif
          ]
     ]
 
-runtestSplitChanUAsync :: Int -> Int -> Int -> IO ()
-runtestSplitChanUAsync writers readers n = do
+asyncReadsWritesUnagi :: Int -> Int -> Int -> IO ()
+asyncReadsWritesUnagi writers readers n = do
   let nNice = n - rem n (lcm writers readers)
   (i,o) <- U.newChan
   rcvrs <- replicateM readers $ async $ replicateM_ (nNice `quot` readers) $ U.readChan o
@@ -131,8 +131,8 @@ runtestSplitChanUAsync writers readers n = do
 
 #ifdef COMPARE_BENCHMARKS
 
-runtestChanAsync :: Int -> Int -> Int -> IO ()
-runtestChanAsync writers readers n = do
+asyncReadsWritesChan :: Int -> Int -> Int -> IO ()
+asyncReadsWritesChan writers readers n = do
   let nNice = n - rem n (lcm writers readers)
   c <- newChan
   rcvrs <- replicateM readers $ async $ replicateM_ (nNice `quot` readers) $ readChan c
@@ -140,8 +140,8 @@ runtestChanAsync writers readers n = do
   mapM_ wait rcvrs
 
 
-runtestTQueueAsync :: Int -> Int -> Int -> IO ()
-runtestTQueueAsync writers readers n = do
+asyncReadsWritesTQueue :: Int -> Int -> Int -> IO ()
+asyncReadsWritesTQueue writers readers n = do
   let nNice = n - rem n (lcm writers readers)
   c <- newTQueueIO
   rcvrs <- replicateM readers $ async $ replicateM_ (nNice `quot` readers) $ atomically $ readTQueue c
@@ -151,8 +151,8 @@ runtestTQueueAsync writers readers n = do
 
 {-
 -- lockfree-queue
-runtestLockfreeQueueAsync :: Int -> Int -> Int -> IO ()
-runtestLockfreeQueueAsync writers readers n = do
+asyncReadsWritesLockfree :: Int -> Int -> Int -> IO ()
+asyncReadsWritesLockfree writers readers n = do
   let nNice = n - rem n (lcm writers readers)
   c <- MS.newQ
   rcvrs <- replicateM readers $ async $ replicateM_ (nNice `quot` readers) $ msreadR c
@@ -164,8 +164,8 @@ msreadR :: MS.LinkedQueue a -> IO a
 msreadR q = MS.tryPopR q >>= maybe (msreadR q) return
 
 -- TBQueue
-runtestTBQueueAsync :: Int -> Int -> Int -> IO ()
-runtestTBQueueAsync writers readers n = do
+asyncReadsWritesTBQueue :: Int -> Int -> Int -> IO ()
+asyncReadsWritesTBQueue writers readers n = do
   let nNice = n - rem n (lcm writers readers)
   c <- newTBQueueIO 4096
   rcvrs <- replicateM readers $ async $ replicateM_ (nNice `quot` readers) $ atomically $ readTBQueue c
