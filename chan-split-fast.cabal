@@ -26,7 +26,7 @@ library
                      , Control.Concurrent.Chan.Unagi
   other-modules:       Control.Concurrent.Chan.Unagi.Internal
   ghc-options:        -Wall -funbox-strict-fields
-  build-depends:       base
+  build-depends:       base < 5
                      , atomic-primops==0.6.0.5
                      , primitive>=0.5.3
   default-language:    Haskell2010
@@ -46,6 +46,45 @@ test-suite test
                      , atomic-primops
   default-language:    Haskell2010
 
+-- compare benchmarks with Chan, TQueue, and (eventually) lockfree-queue?
+flag compare-benchmarks
+  default: False
+  manual:  True
+
+benchmark single
+  type:               exitcode-stdio-1.0
+  ghc-options:        -Wall -O2 -threaded -funbox-strict-fields -fforce-recomp -rtsopts
+  hs-source-dirs:     benchmarks
+  default-language:   Haskell2010
+  default-extensions: CPP
+  build-depends: base
+               , chan-split-fast
+               , criterion
+  if flag(compare-benchmarks)
+      cpp-options: -DCOMPARE_BENCHMARKS
+      build-depends: stm
+                -- , lockfree-queue
+
+  main-is:        single.hs
+  ghc-options:    -with-rtsopts=-N1
+
+benchmark multi
+  type:               exitcode-stdio-1.0
+  ghc-options:        -Wall -O2 -threaded -funbox-strict-fields -fforce-recomp -rtsopts
+  hs-source-dirs:     benchmarks
+  default-language:   Haskell2010
+  default-extensions: CPP
+  build-depends: base
+               , chan-split-fast
+               , criterion
+  if flag(compare-benchmarks)
+      cpp-options: -DCOMPARE_BENCHMARKS
+      build-depends: stm
+                -- , lockfree-queue
+
+  main-is:       multi.hs
+  ghc-options:   -with-rtsopts=-N
+  build-depends: async
 
 
 -- for profiling, checking out core, etc
