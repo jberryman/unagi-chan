@@ -17,7 +17,12 @@ import GHC.Conc
 
 main :: IO ()
 main = do 
-  let n = 100000 -- TODO maybe increase this
+-- save some time and don't let other chans choke:
+#ifdef COMPARE_BENCHMARKS
+  let n = 100000
+#else
+  let n = 1000000
+#endif
 
   procs <- getNumCapabilities
   let procs_div2 = procs `div` 2

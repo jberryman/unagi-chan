@@ -15,7 +15,12 @@ import Criterion.Main
 
 main :: IO ()
 main = do 
-  let n = 100000 -- TODO maybe increase this
+-- save some time and don't let other chans choke:
+#ifdef COMPARE_BENCHMARKS
+  let n = 100000
+#else
+  let n = 1000000
+#endif
 
   (fastEmptyUI,fastEmptyUO) <- U.newChan
 #ifdef COMPARE_BENCHMARKS
