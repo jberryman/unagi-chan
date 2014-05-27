@@ -1,6 +1,6 @@
 module Control.Concurrent.Chan.Split (
     -- * Creating channels
-      newSplitChan
+      newChan
     , InChan(), OutChan()
     -- * Channel operations
     -- ** Reading
@@ -14,13 +14,18 @@ module Control.Concurrent.Chan.Split (
 -- For 'writeList2Chan', as in vanilla Chan
 import System.IO.Unsafe ( unsafeInterleaveIO ) 
 import Control.Concurrent.MVar
-import Control.Exception (mask_, onException, evaluate)
-import Data.Typeable
+import Control.Exception (mask_)
 
-import Control.Concurrent(forkIO)
 import Control.Concurrent.Chan.Split.Internal
 import Data.IORef 
 
+import Data.Atomics
+
+-- ----------------
+-- New Performance Ideas
+--   If our MVar simply goes from empty to filled, can we create our own primop that will be more efficient, w/r/t GC at least? See:
+--     https://ghc.haskell.org/trac/ghc/wiki/Commentary/Rts/Storage/GC/RememberedSets#Mutableobjects:MUT_VARMVAR
+-- ----------------
 
 -- research data dependencies and memory barriers
 --    in other langs we need a "data dependency barrier"; what about in haskell?
@@ -137,11 +142,18 @@ import Data.IORef
 --
 -- TODO
 --   - This module will become Tako
+--   - consider keeping this and using as an improved chan for fallback on non-x86?
 --   - we will modify this to use readMVar along with counter-tagged values
+--     - review notes
+--     - would it be better for write to work as it currently does (more or less) but 
+--       have read use the ticket-taking read method? a delayed writer holds up
+--       the rest, a deleayed reader does not
+--         - or have a secondary staging area writer uses when it sees it's not its turn
+--           with someone else cleaning them up.
 
-newSplitChan :: IO (InChan a, OutChan a)
-{-# INLINABLE newSplitChan #-}
-newSplitChan = do
+newChan :: IO (InChan a, OutChan a)
+{-# INLINABLE newChan #-}
+newChan = do
    hole  <- newEmptyMVar
    readVar  <- newIORef hole
    writeVar <- newIORef hole
@@ -157,7 +169,8 @@ writeChan (InChan writeVar) = \a-> do
       --       code remains free of fragile lockfree logic, I think we should
       --       be immune to re-ordering concerns.
       -- other writers can go
-      oldHole <- atomicModifyIORef' writeVar ((,) newHole)
+      --oldHole <- atomicModifyIORef' writeVar ((,) newHole) -- TODO: atomicModifyIORefCAS works better under contention, right?
+      oldHole <- atomicModifyIORefCAS writeVar ((,) newHole)
       -- first reader can go
       putMVar oldHole (Cons (Just a) newHole)
 
