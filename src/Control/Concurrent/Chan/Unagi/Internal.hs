@@ -33,7 +33,6 @@ import Data.Bits
 --   - hold weak reference to previous segment, and when we move the head
 --     pointer, update `next` to point to this new segment (if it is still
 --     around?)
---   - have reader write undefined after read or make Written unboxed and strict
 
 
 -- Number of reads on which to spin for new segment creation.
@@ -76,10 +75,6 @@ type StreamSegment a = P.MutableArray RealWorld (Cell a)
 --     Empty   -> Written 
 --     Blocking
 data Cell a = Empty | Written a | Blocking !(MVar a)
--- TODO test these on NxN concurrent benchmarks, with an Int payload
---  - change in readChanOnException
---     Written a -> P.writeArray segment segIx undefined >> return a
---  - making Written unboxed/strict
 
 
 -- Constant for now: back-of-envelope considerations:
@@ -168,12 +163,10 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
     case peekTicket cellTkt of
          Written a -> return a
          Empty -> do
-            -- TODO maybe spin some number of times before blocking
             v <- newEmptyMVar
             (success,elseWrittenCell) <- casArrayElem seg segIx cellTkt (Blocking v)
             if success 
               then 
-                 -- TODO consider using readMVar on GHC 7.8:
                 -- Block, waiting for the future writer.
                 takeMVar v `onException` (
                   h $ takeMVar v )
@@ -225,7 +218,6 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
             waitingAdvanceStream next segSource (nEW_SEGMENT_WAIT*segIx) -- NOTE [1]
               >>= go (n-1)
     str <- go segsAway str0
-    -- TODO would a one-shot CAS be better here? Test.
     when (segsAway > 0) $ do
         let !offsetN = 
               offset0 + (segsAway `unsafeShiftL` pOW) --(segsAway*sEGMENT_LENGTH)

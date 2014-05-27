@@ -11,6 +11,9 @@ module Control.Concurrent.Chan.Unagi (
     , writeChan
     , writeList2Chan
     ) where
+-- TODO additonal functions:
+--   - write functions optimized for single-writer
+--   - faster write/read-many that increments counter by N
 
 import Control.Concurrent.Chan.Unagi.Internal
 -- For 'writeList2Chan', as in vanilla Chan
