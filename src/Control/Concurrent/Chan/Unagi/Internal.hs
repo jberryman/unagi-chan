@@ -1,6 +1,9 @@
-{-# LANGUAGE BangPatterns , DeriveDataTypeable #-}
-module Control.Concurrent.Chan.Unagi.Internal (
-     sEGMENT_LENGTH
+{-# LANGUAGE BangPatterns , DeriveDataTypeable, CPP #-}
+module Control.Concurrent.Chan.Unagi.Internal
+#ifdef NOT_x86
+    {-# WARNING "This library is unlikely to perform well on architectures without a fetch-and-add instruction" #-}
+#endif
+    (sEGMENT_LENGTH
     , InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell(..), Stream(..)
     , NextSegment(..), StreamHead(..)
     , newChanStarting, writeChan, readChan, readChanOnException
@@ -89,7 +92,6 @@ data Cell a = Empty | Written a | Blocking !(MVar a)
 sEGMENT_LENGTH :: Int
 {-# INLINE sEGMENT_LENGTH #-}
 sEGMENT_LENGTH = 1024 -- NOTE: THIS REMAIN A POWER OF 2!
--- TODO Finalize this default.
 
 -- NOTE In general we'll have two segments allocated at any given time in
 -- addition to the segment template, so in the worst case, when the program
@@ -103,7 +105,7 @@ data Stream a =
            -- segments:
            !(IORef (NextSegment a))
 
-data NextSegment a = NoSegment | Next !(Stream a) -- TODO or Maybe? Does unboxing strict matter here?
+data NextSegment a = NoSegment | Next !(Stream a)
 
 -- we expose `startingCellOffset` for debugging correct behavior with overflow:
 newChanStarting :: Int -> IO (InChan a, OutChan a)
@@ -207,7 +209,11 @@ moveToNextCell :: ChanEnd a -> IO (Int, Stream a)
 moveToNextCell (ChanEnd segSource counter streamHead) = do
     (StreamHead offset0 str0) <- readIORef streamHead
     -- NOTE [3]
-    -- !!! TODO BARRIER REQUIRED FOR NON-X86 !!!
+#ifdef NOT_x86 
+    -- fetch-and-add is a full barrier on x86; otherwise we need to make sure
+    -- the read above occurrs before our fetch-and-add:
+    loadLoadBarrier
+#endif
     ix <- incrCounter 1 counter
     let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
                  divMod_sEGMENT_LENGTH $! (ix - offset0)

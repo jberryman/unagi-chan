@@ -27,14 +27,20 @@ library
                      , atomic-primops==0.6.0.5
                      , primitive>=0.5.3
   default-language:    Haskell2010
+  
+  -- We'll need some additional barriers for correctness:
+  if !arch(i386) && !arch(x86_64)
+    cpp-options: -DNOT_x86
+
 
 -- Implementations roadmap:
---   - fixed size array of purely-functional dequeues (maybe "Tako"?) (fecth-and-add, then CAS)
---       - variant replacing CAS with blocking turn-taking
+--   - fixed size MutableArray of purely-functional dequeues (maybe "Tako"?) (fecth-and-add, then CAS)
+--       - variant replacing CAS with blocking turn-taking, also play with leap-frogging cache-lines
 --   - bounded Tako variant: Array MVar
 --   - implement "Fast Concurrent Queues for x86 Processors" by Morrison & Afek (non-blocking, probably more clever)
 --   - unboxed Unagi w/ two MutableByteArrays (fetch-and-add, write A2, barrier, CAS A1; f&a, CAS A2, barrier, read A1)
 --     also play with spreading writes across array for cache, and maybe prefetching w/ read.
+--   - boxed Unagi variant avoiding CAS with read simply spinning a few times and then calling yield, or something else
 
 -- TODO  possibly have a different Main.hs for each Chan type, but then use different test-suites which set a var to decide which to import.
 test-suite test
