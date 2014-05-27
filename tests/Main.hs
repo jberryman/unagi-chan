@@ -12,6 +12,7 @@ import Chan003
 import Smoke
 
 -- implementation-specific tests:
+import Atomics
 import Unagi
 
 main :: IO ()
@@ -28,6 +29,9 @@ main = do
     hSetBuffering stdout NoBuffering
 
     -- -----------------------------------
+
+    -- test important properties of our atomic-primops:
+    atomicsMain
  
     fifoSmoke 100000
     testContention 2 2 1000000
