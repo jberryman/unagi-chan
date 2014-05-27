@@ -126,11 +126,9 @@ newChanStarting startingCellOffset = do
     liftA2 (,) (InChan savedEmptyTkt <$> end) (OutChan <$> end)
 
 
--- TODO add benchmark that does a mapM_ (writeChan c), and test whether moving \a-> to RHS helps w/ inlining
--- TODO add benchmark that sends and uses Ints to test whether unboxed-strict elements in Cell help
 writeChan :: InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
-writeChan (InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) a = mask_ $ do
+writeChan (InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) = \a-> mask_ $ do 
     (segIx, (Stream seg next)) <- moveToNextCell ce
     (success,nonEmptyTkt) <- casArrayElem seg segIx savedEmptyTkt (Written a)
     -- try to pre-allocate next segment; NOTE [1]
