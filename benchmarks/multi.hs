@@ -21,7 +21,7 @@ main = do
 #ifdef COMPARE_BENCHMARKS
   let n = 100000
 #else
-  let n = 1000000
+  let n = 100000 -- TODO 1mil ?
 #endif
 
   procs <- getNumCapabilities
@@ -49,7 +49,7 @@ main = do
               -- fairness properties in the case of MVar), as well as
               -- all of the above; this is probably less than
               -- informative. Try threadscope on a standalone test:
-              , bench "async 100 writers 100 readers" $ asyncReadsWritesUnagi 100 100 n
+              , bench "oversubscribing: async 100 writers 100 readers" $ asyncReadsWritesUnagi 100 100 n
               -- NOTE: this is a bit hackish, filling in one test and
               -- reading in the other; make sure memory usage isn't
               -- influencing mean:
@@ -69,7 +69,7 @@ main = do
 #ifdef COMPARE_BENCHMARKS
         , bgroup "Chan" $
               [ bench "async 1 writer 1 readers" $ asyncReadsWritesChan 1 1 n
-              , bench "async 100 writers 100 readers" $ asyncReadsWritesChan 100 100 n
+              , bench "oversubscribing: async 100 writers 100 readers" $ asyncReadsWritesChan 100 100 n
               , bench ("async "++(show procs)++" writers") $ do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
                   mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (writeChan fill_empty_chan ()) >> putMVar done1 ()) $ zip starts dones
@@ -82,7 +82,7 @@ main = do
               ]
         , bgroup "TQueue" $
               [ bench "async 1 writers 1 readers" $ asyncReadsWritesTQueue 1 1 n
-              , bench "async 100 writers 100 readers" $ asyncReadsWritesTQueue 100 100 n
+              , bench "oversubscribing: async 100 writers 100 readers" $ asyncReadsWritesTQueue 100 100 n
               -- This measures writer/writer contention:
               , bench ("async "++(show procs)++" writers") $ do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
@@ -97,7 +97,7 @@ main = do
         {-
         , bgroup "TBQueue" $
               [ bench "async 1 writers 1 readers" $ asyncReadsWritesTBQueue 1 1 n
-              , bench "async 100 writers 100 readers" $ asyncReadsWritesTBQueue 100 100 n
+              , bench "oversubscribing: async 100 writers 100 readers" $ asyncReadsWritesTBQueue 100 100 n
               -- This measures writer/writer contention:
               , bench ("async "++(show procs)++" writers") $ do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
@@ -112,7 +112,7 @@ main = do
         -- michael-scott queue implementation, using atomic-primops
         , bgroup "lockfree-queue" $
               [ bench "async 1 writer 1 readers" $ asyncReadsWritesLockfree 1 1 n
-              , bench "async 100 writers 100 readers" $ asyncReadsWritesLockfree 100 100 n
+              , bench "oversubscribing: async 100 writers 100 readers" $ asyncReadsWritesLockfree 100 100 n
               , bench ("async "++(show procs)++" writers") $ do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
                   mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (MS.pushL fill_empty_lockfree ()) >> putMVar done1 ()) $ zip starts dones
@@ -141,7 +141,7 @@ asyncSumIntUnagi :: Int -> IO Int
 asyncSumIntUnagi n = do
    (i,o) <- U.newChan
    let readerSum  0  !tot = return tot
-       readerSum !n' !tot = U.readChan o >>= (readerSum (n'-1) . (tot+))
+       readerSum !n' !tot = U.readChan o >>= \x-> readerSum (n'-1) (tot+x)
    _ <- async $ mapM_ (U.writeChan i) [1..n] -- NOTE: partially-applied writeChan
    readerSum n 0
 
