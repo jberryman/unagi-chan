@@ -15,16 +15,14 @@ module Control.Concurrent.Chan.Unagi.Internal
 import Control.Concurrent.MVar
 import Data.IORef
 import Control.Exception
-
 import Control.Monad.Primitive(RealWorld)
 import Data.Atomics.Counter
 import Data.Atomics
 import qualified Data.Primitive as P
-
 import Control.Monad
 import Control.Applicative
-
 import Data.Bits
+import Data.Typeable(Typeable)
 
 -- TODO WRT GARBAGE COLLECTION
 --  This can lead to large amounts of memory use in theory:
@@ -45,8 +43,16 @@ nEW_SEGMENT_WAIT :: Int
 nEW_SEGMENT_WAIT = round (((14.6::Float) + 0.3*fromIntegral sEGMENT_LENGTH) / 3.7) + 10
 
 data InChan a = InChan !(Ticket (Cell a)) !(ChanEnd a)
+    deriving Typeable
 newtype OutChan a = OutChan (ChanEnd a)
--- TODO derive Eq & Typeable
+    deriving Typeable
+
+instance Eq (InChan a) where
+    (InChan _ (ChanEnd _ _ headA)) == (InChan _ (ChanEnd _ _ headB))
+        = headA == headB
+instance Eq (OutChan a) where
+    (OutChan (ChanEnd _ _ headA)) == (OutChan (ChanEnd _ _ headB))
+        = headA == headB
 
 -- TODO POTENTIAL CPP FLAGS (or functions)
 --   - Strict element (or lazy? maybe also reveal a writeChan' when relevant?)
@@ -63,6 +69,7 @@ data ChanEnd a =
             -- the stream head; this must never point to a segment whose offset
             -- is greater than the counter value
             !(IORef (StreamHead a))
+    deriving Typeable
 
 data StreamHead a = StreamHead !Int !(Stream a)
 
@@ -110,15 +117,14 @@ data NextSegment a = NoSegment | Next !(Stream a)
 -- we expose `startingCellOffset` for debugging correct behavior with overflow:
 newChanStarting :: Int -> IO (InChan a, OutChan a)
 {-# INLINE newChanStarting #-}
-newChanStarting startingCellOffset = do
-    let firstCount = startingCellOffset - 1
+newChanStarting !startingCellOffset = do
     segSource <- newSegmentSource
     firstSeg <- segSource
     -- collect a ticket to save for writer CAS
     savedEmptyTkt <- readArrayElem firstSeg 0
     stream <- Stream firstSeg <$> newIORef NoSegment
     let end = ChanEnd segSource 
-                  <$> newCounter firstCount 
+                  <$> newCounter (startingCellOffset - 1)
                   <*> newIORef (StreamHead startingCellOffset stream)
     liftA2 (,) (InChan savedEmptyTkt <$> end) (OutChan <$> end)
 
