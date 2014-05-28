@@ -12,6 +12,7 @@ module Control.Concurrent.Chan.Unagi (
     , writeList2Chan
     ) where
 -- TODO additonal functions:
+--   - dupChan :: InChan a -> IO (OutChan a) (should be doable, with a readMVar in blocking read)
 --   - write functions optimized for single-writer
 --   - faster write/read-many that increments counter by N
 

@@ -36,6 +36,8 @@ library
 -- Implementations roadmap:
 --   - fixed size MutableArray of purely-functional dequeues (maybe "Tako"?) (fecth-and-add, then CAS)
 --       - variant replacing CAS with blocking turn-taking, also play with leap-frogging cache-lines
+--       - variant in STM (how to safely do the initial incrCounter at most once though?)
+--         would also let us separate read and write buckets.
 --   - bounded Tako variant: Array MVar
 --   - implement "Fast Concurrent Queues for x86 Processors" by Morrison & Afek (non-blocking, probably more clever)
 --   - unboxed Unagi w/ two MutableByteArrays (fetch-and-add, write A2, barrier, CAS A1; f&a, CAS A2, barrier, read A1)
@@ -54,6 +56,7 @@ test-suite test
   build-depends:       base
                      , primitive
                      , atomic-primops
+                     , containers
   default-language:    Haskell2010
 
 -- compare benchmarks with Chan, TQueue, and (eventually) lockfree-queue?
