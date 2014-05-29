@@ -1,7 +1,7 @@
 module Atomics where
 
 import Control.Concurrent
-import Data.Atomics.Counter
+import Data.Atomics.Counter.Fat
 import Data.Atomics
 import Data.IORef
 import Control.Monad
@@ -12,13 +12,24 @@ import Data.List
 
 atomicsMain = do
     putStrLn "Testing atomic-primops:"
+    putStr "    counter smoke test... "
+    counterSane
     putStr "    counter overflow... "
     testCounterOverflow
-    putStr "    CAS... "
-    testConsistentSuccessFailure
     putStr "    counter is atomic... "
     counterTest
+    putStr "    CAS... "
+    testConsistentSuccessFailure
 
+-- catch real stupid bugs before machine gets hot:
+counterSane :: IO ()
+counterSane = do
+    cntr <- newCounter 1337
+    n <- readCounter cntr
+    unless (n == 1337) $ error "newCounter magnificently broken"
+    incrCounter 1 cntr
+    n2 <- readCounter cntr
+    unless (n2 == 1338) $ error "incrCounter magnificently broken"
 
 cHUNK_SIZE = 32
 maxInt = maxBound :: Int

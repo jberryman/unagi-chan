@@ -16,7 +16,7 @@ import Control.Concurrent.MVar
 import Data.IORef
 import Control.Exception
 import Control.Monad.Primitive(RealWorld)
-import Data.Atomics.Counter
+import Data.Atomics.Counter.Fat
 import Data.Atomics
 import qualified Data.Primitive as P
 import Control.Monad

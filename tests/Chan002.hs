@@ -5,7 +5,7 @@ import qualified Control.Concurrent.Chan.Unagi as U
 import qualified Control.Concurrent.Chan.Unagi.Internal as UI
 import Control.Exception
 import Control.Monad
-import Data.Atomics.Counter
+import Data.Atomics.Counter.Fat
 
 
 -- DIFFERENCES:
