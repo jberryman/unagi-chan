@@ -23,6 +23,7 @@ import Control.Monad
 import Control.Applicative
 import Data.Bits
 import Data.Typeable(Typeable)
+import GHC.Exts(inline)
 
 -- TODO WRT GARBAGE COLLECTION
 --  This can lead to large amounts of memory use in theory:
@@ -163,7 +164,7 @@ writeChan (InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) = \a-> mask_ $ do
 -- from whether cakes are given to well-behaved customers in the order they
 -- came out of the oven, or whether a customer leaving at the wrong moment
 -- might cause the cake shop to burn down...
-readChanOnExceptionUnmasked :: (IO a -> IO ()) -> OutChan a -> IO a
+readChanOnExceptionUnmasked :: (IO a -> IO a) -> OutChan a -> IO a
 {-# INLINE readChanOnExceptionUnmasked #-}
 readChanOnExceptionUnmasked h = \(OutChan ce)-> do
     (segIx, (Stream seg _)) <- moveToNextCell ce
@@ -176,8 +177,7 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
             if success 
               then 
                 -- Block, waiting for the future writer.
-                takeMVar v `onException` (
-                  h $ takeMVar v )
+                inline h $ takeMVar v
               -- In the meantime a writer has written. Good!
               else case peekTicket elseWrittenCell of
                         Written a -> return a
@@ -193,7 +193,7 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
 -- this scenario, you can use 'readChanOnException'.
 readChan :: OutChan a -> IO a
 {-# INLINE readChan #-}
-readChan = readChanOnExceptionUnmasked void
+readChan = readChanOnExceptionUnmasked id
 
 -- | Like 'readChan' but allows recovery of the queue element which would have
 -- been read, in the case that an async exception is raised during the read. To
@@ -205,7 +205,8 @@ readChan = readChanOnExceptionUnmasked void
 -- the passed @IO a@ is the only way to access the element.
 readChanOnException :: OutChan a -> (IO a -> IO ()) -> IO a
 {-# INLINE readChanOnException #-}
-readChanOnException c h = mask_ $ readChanOnExceptionUnmasked h c
+readChanOnException c h = mask_ $ 
+    readChanOnExceptionUnmasked (\tk-> tk `onException` (h tk)) c
 
 -- increments counter, finds stream segment of corresponding cell (updating the
 -- stream head pointer as needed), and returns the stream segment and relative
