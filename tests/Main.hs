@@ -5,9 +5,9 @@ import System.IO
 import Control.Concurrent
 import Control.Exception
 
--- generic tests:
+-- implementation-agnostic tests:
 import Qsem001
-import Chan002
+--import Chan002
 import Chan003
 import Smoke
 
@@ -41,8 +41,9 @@ main = do
 
     -- check for deadlocks:
     let tries = 50000
-    putStrLn $ "Checking for deadlocks from killed reader, x"++show tries
-    checkDeadlocksReader tries
+    -- TODO add back chan-agnostic basic test here
+    --putStrLn $ "Checking for deadlocks from killed reader, x"++show tries
+    --checkDeadlocksReader tries
     putStrLn $ "Checking for deadlocks from killed writer, x"++show tries
     checkDeadlocksWriter tries
 
