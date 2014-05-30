@@ -5,10 +5,9 @@ import Control.Concurrent
 import qualified Control.Concurrent.Chan.Unagi as S
 import Control.Exception
 import Control.Monad
-import System.IO
-import System.Environment
 
 -- test for deadlocks from async exceptions raised in writer
+checkDeadlocksWriter :: Int -> IO ()
 checkDeadlocksWriter n = do
   replicateM_ n $ do
          (i,o) <- S.newChan

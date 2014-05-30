@@ -2,11 +2,8 @@
 module Smoke where
 
 import Control.Monad
-import System.Environment
-import Control.Concurrent.MVar
 import Control.Concurrent
-import qualified Control.Concurrent.Chan.Unagi as S
--- import qualified Control.Concurrent.Chan.Split as S
+import qualified Control.Concurrent.Chan.Unagi as U
 import qualified Control.Concurrent.Chan as C
 
 import Data.List
@@ -14,9 +11,9 @@ import Data.List
 fifoSmoke :: Int -> IO ()
 fifoSmoke n = do
     putStr "FIFO smoke test... "
-    (i,o) <- S.newChan
-    mapM_ (S.writeChan i) [1..n]
-    nsOut <- replicateM n $ S.readChan o
+    (i,o) <- U.newChan
+    mapM_ (U.writeChan i) [1..n]
+    nsOut <- replicateM n $ U.readChan o
     if nsOut == [1..n]
         then putStrLn "OK"
         else error "Cough!"
@@ -29,13 +26,13 @@ testContention writers readers n = do
                      -- force list; don't change --
   out <- C.newChan
 
-  (i,o) <- S.newChan
+  (i,o) <- U.newChan
   -- some will get blocked indefinitely:
-  replicateM readers $ forkIO $ forever $
-      S.readChan o >>= C.writeChan out
+  void $ replicateM readers $ forkIO $ forever $
+      U.readChan o >>= C.writeChan out
   
   putStrLn $ "Sending "++(show $ length $ concat groups)++" messages, with "++(show readers)++" readers and "++(show writers)++" writers."
-  mapM_ (forkIO . mapM_ (S.writeChan i)) groups
+  mapM_ (forkIO . mapM_ (U.writeChan i)) groups
 
   ns <- replicateM nNice (C.readChan out)
   isEmpty <- C.isEmptyChan out

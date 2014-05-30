@@ -5,9 +5,6 @@ module Unagi (unagiMain) where
 import Control.Concurrent.Chan.Unagi
 import qualified Control.Concurrent.Chan.Unagi.Internal as UI
 import Control.Monad
-import Control.Exception
-import Control.Concurrent.MVar
-import Control.Concurrent(forkIO,threadDelay)
 import qualified Data.Primitive as P
 import Data.IORef
 
@@ -28,9 +25,11 @@ unagiMain = do
     putStrLn "OK"
 
 
+smoke :: Int -> IO ()
 smoke n = smoke1 n >> smoke2 n
 
 -- www.../rrr... spanning overflow
+smoke1 :: Int -> IO ()
 smoke1 n = do
     (i,o) <- UI.newChanStarting n
     let inp = [0 .. (UI.sEGMENT_LENGTH * 3)]
@@ -41,6 +40,7 @@ smoke1 n = do
         else error $ "Smoke test failed with starting offset of: "++(show n)
 
 -- w/r/w/r... spanning overflow
+smoke2 :: Int -> IO ()
 smoke2 n = do
     (i,o) <- UI.newChanStarting n
     let inp = [0 .. (UI.sEGMENT_LENGTH * 3)]
@@ -66,7 +66,7 @@ correctFirstWrite n = do
 -- also check that segments pre-allocated as expected
 correctInitialWrites :: Int -> IO ()
 correctInitialWrites startN = do
-    (i,o@(UI.OutChan (UI.ChanEnd _ _ arrRef))) <- UI.newChanStarting startN
+    (i,(UI.OutChan (UI.ChanEnd _ _ arrRef))) <- UI.newChanStarting startN
     let writes = [0..UI.sEGMENT_LENGTH]
     mapM_ (writeChan i) writes
     (UI.StreamHead _ (UI.Stream arr next)) <- readIORef arrRef

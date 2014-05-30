@@ -5,21 +5,28 @@ import Data.Atomics.Counter.Fat
 import Data.Atomics
 import Data.IORef
 import Control.Monad
-import GHC.Conc
-import Control.Exception(evaluate)
 import qualified Data.Set as Set
 import Data.List
 
+atomicsMain :: IO ()
 atomicsMain = do
     putStrLn "Testing atomic-primops:"
+    -- ------
     putStr "    counter smoke test... "
     counterSane
+    putStrLn "OK"
+    -- ------
     putStr "    counter overflow... "
     testCounterOverflow
+    putStrLn "OK"
+    -- ------
     putStr "    counter is atomic... "
     counterTest
+    putStrLn "OK"
+    -- ------
     putStr "    CAS... "
     testConsistentSuccessFailure
+    putStrLn "OK"
 
 -- catch real stupid bugs before machine gets hot:
 counterSane :: IO ()
@@ -27,14 +34,16 @@ counterSane = do
     cntr <- newCounter 1337
     n <- readCounter cntr
     unless (n == 1337) $ error "newCounter magnificently broken"
-    incrCounter 1 cntr
-    n2 <- readCounter cntr
-    unless (n2 == 1338) $ error "incrCounter magnificently broken"
+    n2 <- incrCounter 1 cntr
+    n2' <- readCounter cntr
+    unless (n2 == 1338 && n2' == 1338) $ error "incrCounter magnificently broken"
 
+cHUNK_SIZE, maxInt, minInt :: Int
 cHUNK_SIZE = 32
-maxInt = maxBound :: Int
-minInt = minBound :: Int
+maxInt = maxBound
+minInt = minBound
 -- Test some properties of our counter we'd like to assume:
+testCounterOverflow :: IO ()
 testCounterOverflow = do
     let ourMod = mod -- or something more fancy?
     cntr <- newCounter (maxInt - (cHUNK_SIZE `div` 2)) 
@@ -54,10 +63,9 @@ testCounterOverflow = do
     -- (2) test that Ints and counter overflow in exactly the same way
     let spanningInts = take cHUNK_SIZE $ iterate (+1) (maxInt - (cHUNK_SIZE `div` 2) + 1) 
     unless (spanningInts == spanningCntr) $ do
-        putStrLn $ "Ints overflow differently than counter: "
-        putStrLn $ "Int: "++(show spanningInts)
-        putStrLn $ "Counter: "++(show spanningCntr)
-        error "Fail"
+        error $ "Ints overflow differently than counter: "++
+                "\nInt: "++(show spanningInts)++
+                "\nCounter: "++(show spanningCntr)
 
     -- (We don't use this property)
     cntr2 <- newCounter maxBound
@@ -68,23 +76,24 @@ testCounterOverflow = do
     -- (3) test subtraction across boundary: count - newFirstIndex, for window spanning boundary.
     cntr3 <- newCounter (maxBound - 1)
     let ls = take 30 $ iterate (+1) $ maxBound - 10
-    cs <- mapM (\l-> fmap (subtract l) $ incrCounter 1 cntr3) ls
+    cs <- mapM (\x-> fmap (subtract x) $ incrCounter 1 cntr3) ls
     unless (cs == replicate 30 10) $ 
         error $ "Derp. We don't know how subtraction works: "++(show cs)
     -- (4) readIORef before fetchAndAdd w/ barriers
-    putStrLn "OK"
+    -- TODO?
 
 -- Test these assumptions:
 --   1) If a CAS fails in thread 1 then another CAS (in thread 2, say) succeeded; i.e. no false negatives
 --   2) In the case that thread 1's CAS failed, the ticket returned with (False,tk) will contain that newly-written value from thread 2
+testConsistentSuccessFailure :: IO ()
 testConsistentSuccessFailure = do
     var <- newIORef "0"
 
     sem <- newIORef (0::Int)
     outs <- replicateM 2 newEmptyMVar 
 
-    forkSync sem 2 $ test "a" var (outs!!0)
-    forkSync sem 2 $ test "b" var (outs!!1)
+    _ <- forkSync sem 2 $ test "a" var (outs!!0)
+    _ <- forkSync sem 2 $ test "b" var (outs!!1)
 
     mapM takeMVar outs >>= examine
        -- w/r/t (2) above: we only try to find an element read along with False
@@ -106,15 +115,15 @@ testConsistentSuccessFailure = do
              ok1 = all (flip Set.member successes2) failures1
              ok2 = all (flip Set.member successes1) failures2
          if ok1 && ok2
-             then if length failures1 < (attempts `div` 6) || length failures2 < (attempts `div` 6) 
-                    then error "There was not enough contention to trust test. Please retry."
-                    else putStrLn "OK"
+             then when (length failures1 < (attempts `div` 6) || length failures2 < (attempts `div` 6)) $
+                    error "There was not enough contention to trust test. Please retry."
              else do print res1
                      print res2
                      error "FAILURE!"
+       examine _ = error "Fix testConsistentSuccessFailure"
 
                    
--- forkSync :: IORef Int -> Int -> IO a -> IO ThreadId
+forkSync :: IORef Int -> Int -> IO () -> IO ThreadId
 forkSync sem target io = 
     forkIO $ (busyWait >> io)
   where busyWait =
@@ -124,20 +133,20 @@ forkSync sem target io =
             unless (n == target) wait
     
 
+counterTest :: IO ()
 counterTest = do
-    n0 <- testAtomicCount newCounter readCounter incrCounter
-    n1 <- testAtomicCount newMVar takeMVar (\n v-> modifyMVar_ v (evaluate . (+1)) )
-    if n0 /= n1
-        then putStrLn $ "Counter broken: expecting "++(show n1)++" got "++(show n0)
-        else putStrLn "OK"
+    let n = 10000000
+    nOut <- testAtomicCounter n
+    when (nOut /= n) $
+        error $ "Counter broken: expecting "++(show n)++" got "++(show nOut)
 
-testAtomicCount new read incr = do
-  let n = 1000000
+testAtomicCounter :: Int -> IO Int
+testAtomicCounter n = do
   procs <- getNumCapabilities
 
-  counter <- new (1::Int)
+  counter <- newCounter (0::Int)
   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
-  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (incr 1 counter) >> putMVar done1 ()) $ zip starts dones
+  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (incrCounter 1 counter) >> putMVar done1 ()) $ zip starts dones
   mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
   
-  read counter
+  readCounter counter

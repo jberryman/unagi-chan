@@ -2,20 +2,14 @@ module Qsem001 where
 
 import Control.Concurrent.QSem as OldQ
 
-import Control.Concurrent.Chan.Unagi
--- import Control.Concurrent.Chan.Split
-import Control.Concurrent (forkIO, threadDelay, killThread, yield)
-import Control.Concurrent.MVar
-import Control.Exception
+import qualified Control.Concurrent.Chan.Unagi as U
+import Control.Concurrent (forkIO, threadDelay)
 import Control.Monad
 
-new = newQSem
-wait = waitQSem
-signal = signalQSem
 
 -- --------------------------
 -- NOTE: these are tests for QSem, but we'd like to be sure our Chan doesn't
--- break them.
+-- break them. Probably remove this.
 -- --------------------------
 
 --------
@@ -23,14 +17,17 @@ signal = signalQSem
 
 type Assertion = IO ()
 
+(@?=) :: (Show a, Monad m, Eq a) => a -> a -> m ()
 x @?= y = when (x /= y) $ error (show x ++ " /= " ++ show y)
 
 testCase :: String -> IO () -> IO ()
 testCase n io = putStrLn ("test " ++ n) >> io
 
+defaultMainQSem :: IO ()
 defaultMainQSem = sequence_ tests
 ------
 
+tests :: [IO ()]
 tests = [
     -- testCase "sem1" sem1,
     -- testCase "sem2" sem2,
@@ -42,18 +39,18 @@ tests = [
 
 sem_fifo :: Assertion
 sem_fifo = do
-  (i,o) <- newChan
-  q <- new 0
-  t1 <- forkIO $ do wait q; writeChan i 'a'
+  (i,o) <- U.newChan
+  q <- newQSem 0
+  _ <- forkIO $ do waitQSem q; U.writeChan i 'a'
   threadDelay 10000
-  t2 <- forkIO $ do wait q; writeChan i 'b'
+  _ <- forkIO $ do waitQSem q; U.writeChan i 'b'
   threadDelay 10000
-  t3 <- forkIO $ do wait q; writeChan i 'c'
+  _ <- forkIO $ do waitQSem q; U.writeChan i 'c'
   threadDelay 10000
-  signal q
-  a <- readChan o
-  signal q
-  b <- readChan o
-  signal q
-  c <- readChan o
+  signalQSem q
+  a <- U.readChan o
+  signalQSem q
+  b <- U.readChan o
+  signalQSem q
+  c <- U.readChan o
   [a,b,c] @?= "abc"
