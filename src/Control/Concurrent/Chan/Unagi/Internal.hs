@@ -7,6 +7,7 @@ module Control.Concurrent.Chan.Unagi.Internal
     , InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell(..), Stream(..)
     , NextSegment(..), StreamHead(..)
     , newChanStarting, writeChan, readChan, readChanOnException
+    , dupChan
     )
     where
 
@@ -82,6 +83,7 @@ type StreamSegment a = P.MutableArray RealWorld (Cell a)
 --   During Read:
 --     Empty   -> Blocking
 --     Written
+--     Blocking (only when dupChan used)
 --   During Write:
 --     Empty   -> Written 
 --     Blocking
@@ -129,6 +131,22 @@ newChanStarting !startingCellOffset = do
                   <*> newIORef (StreamHead startingCellOffset stream)
     liftA2 (,) (InChan savedEmptyTkt <$> end) (OutChan <$> end)
 
+-- | Duplicate a chan: the returned @OutChan@ begins empty, but data written to
+-- the argument @InChan@ from then on will be available from both the original
+-- @OutChan@ and the one returned here, creating a kind of broadcast channel.
+dupChan :: InChan a -> IO (OutChan a)
+{-# INLINE dupChan #-}
+dupChan (InChan _ (ChanEnd segSource counter streamHead)) = do
+    hLoc <- readIORef streamHead
+    loadLoadBarrier  -- NOTE [1]
+    wCount <- readCounter counter
+    
+    counter' <- newCounter wCount 
+    streamHead' <- newIORef hLoc
+    return $ OutChan (ChanEnd segSource counter' streamHead')
+  -- [1] We must read the streamHead before inspecting the counter; otherwise,
+  -- as writers write, the stream head pointer may advance past the cell
+  -- indicated by wCount.
 
 writeChan :: InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
@@ -175,14 +193,16 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
             v <- newEmptyMVar
             (success,elseWrittenCell) <- casArrayElem seg segIx cellTkt (Blocking v)
             if success 
-              then 
-                -- Block, waiting for the future writer.
-                inline h $ takeMVar v
-              -- In the meantime a writer has written. Good!
+              then readBlocking v
               else case peekTicket elseWrittenCell of
+                        -- In the meantime a writer has written. Good!
                         Written a -> return a
-                        _ -> error "Impossible! Expecting Written"
-         _ -> error "Impossible! Only expecting Empty or Written"
+                        -- ...or a dupChan reader initiated blocking:
+                        Blocking v2 -> readBlocking v2
+                        _ -> error "Impossible! Expecting Written or Blocking"
+         Blocking v -> readBlocking v
+  -- N.B. must use `readMVar` here to support `dupChan`:
+  where readBlocking v = inline h $ readMVar v 
 
 
 -- | Read an element from the chan, blocking if the chan is empty.
@@ -194,6 +214,7 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
 readChan :: OutChan a -> IO a
 {-# INLINE readChan #-}
 readChan = readChanOnExceptionUnmasked id
+          --TODO get id to disappear when inlined
 
 -- | Like 'readChan' but allows recovery of the queue element which would have
 -- been read, in the case that an async exception is raised during the read. To
@@ -206,7 +227,7 @@ readChan = readChanOnExceptionUnmasked id
 readChanOnException :: OutChan a -> (IO a -> IO ()) -> IO a
 {-# INLINE readChanOnException #-}
 readChanOnException c h = mask_ $ 
-    readChanOnExceptionUnmasked (\tk-> tk `onException` (h tk)) c
+    readChanOnExceptionUnmasked (\io-> io `onException` (h io)) c
 
 -- increments counter, finds stream segment of corresponding cell (updating the
 -- stream head pointer as needed), and returns the stream segment and relative

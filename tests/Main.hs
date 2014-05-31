@@ -10,6 +10,7 @@ import Qsem001
 import Chan002
 import Chan003
 import Smoke
+import DupChan
 
 -- implementation-specific tests:
 import Atomics
@@ -35,6 +36,9 @@ main = do
  
     fifoSmoke 100000
     testContention 2 2 1000000
+
+    -- dupChan tests
+    dupChanMain
 
     -- QSem tests:
     defaultMainQSem
