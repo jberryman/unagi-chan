@@ -28,7 +28,7 @@ import GHC.Exts(inline)
 
 -- TODO WRT GARBAGE COLLECTION
 --  This can lead to large amounts of memory use in theory:
---   1. overhead of pre-allocated arrays and template
+--   1. overhead of pre-allocated arrays and template and fat counter
 --   2. already-read elements in arrays not-yet GC'd
 --   3. array and element overhead from a writer/reader delayed (many intermediate chunks)
 --

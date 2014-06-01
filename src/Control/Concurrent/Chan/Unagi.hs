@@ -40,15 +40,3 @@ getChanContents ch = unsafeInterleaveIO (do
 writeList2Chan :: InChan a -> [a] -> IO ()
 {-# INLINABLE writeList2Chan #-}
 writeList2Chan ch = sequence_ . map (writeChan ch)
-
-
--- TODO checklist
--- - implement additional tests and assertions for Unagi
--- - add a benchmark and validate Unagi approach (move from chan-benchmarks)
--- - add some more advanced behavior in notes, re. memory effects / wait-free-ness
--- - examine some behavior via eventlog; maybe create a script to do automated analysis of it.
--- - add atomic-primop tests
--- - figure out naming and module structure
---      - "fishy-chans", with code-named modules: Tako, Unagi
--- - consider travis CI
--- - either release or finish Tako variant, and set up tests for it.
