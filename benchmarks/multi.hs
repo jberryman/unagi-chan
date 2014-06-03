@@ -2,6 +2,7 @@
 module Main where
 
 import qualified Control.Concurrent.Chan.Unagi as U
+import qualified Control.Concurrent.Chan.Unagi.Unboxed as UU
 #ifdef COMPARE_BENCHMARKS
 import Control.Concurrent.Chan
 import Control.Concurrent.STM
@@ -30,6 +31,7 @@ main = do
                      else error "Run with RTS +N2 or more"
 
   (fill_empty_fastUI, fill_empty_fastUO) <- U.newChan
+  (fill_empty_fastUUI, fill_empty_fastUUO) <- UU.newChan -- TODO WHY IS THIS COMPILING BELOW???
 #ifdef COMPARE_BENCHMARKS
   fill_empty_chan <- newChan
   fill_empty_tqueue <- newTQueueIO
@@ -65,6 +67,21 @@ main = do
                   mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
 
               , bench "async Int writer, main thread read and sum" $ nfIO $ asyncSumIntUnagi n
+              ]
+        , bgroup "chan-split-fast Unagi.Unboxed" $
+              [ bench "async 1 writers 1 readers" $ asyncReadsWritesUnagiUnboxed 1 1 n
+              , bench "oversubscribing: async 100 writers 100 readers" $ asyncReadsWritesUnagiUnboxed 100 100 n
+              -- TODO using Ints here instead of (); change others so we can properly compare?
+              , bench ("async "++(show procs)++" writers") $ do
+                  dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
+                  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (UU.writeChan fill_empty_fastUUI (0::Int)) >> putMVar done1 ()) $ zip starts dones
+                  mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
+              , bench ("async "++(show procs)++" readers") $ do
+                  dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
+                  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (UU.readChan fill_empty_fastUUO) >> putMVar done1 ()) $ zip starts dones
+                  mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
+
+              , bench "async Int writer, main thread read and sum" $ nfIO $ asyncSumIntUnagiUnboxed n
               ]
 #ifdef COMPARE_BENCHMARKS
         , bgroup "Chan" $
@@ -127,6 +144,9 @@ main = do
          ]
     ]
 
+
+-- TODO maybe factor out reads writes to avoid boilerplate??
+
 asyncReadsWritesUnagi :: Int -> Int -> Int -> IO ()
 asyncReadsWritesUnagi writers readers n = do
   let nNice = n - rem n (lcm writers readers)
@@ -141,9 +161,30 @@ asyncSumIntUnagi :: Int -> IO Int
 asyncSumIntUnagi n = do
    (i,o) <- U.newChan
    let readerSum  0  !tot = return tot
-       readerSum !n' !tot = U.readChan o >>= \x-> readerSum (n'-1) (tot+x)
+       readerSum !n' !tot = U.readChan o >>= readerSum (n'-1) . (tot+)
    _ <- async $ mapM_ (U.writeChan i) [1..n] -- NOTE: partially-applied writeChan
    readerSum n 0
+
+
+
+-- Unboxed Unagi:
+-- NOTE: using Int here instead of (). TODO change others so we can properly compare?
+asyncReadsWritesUnagiUnboxed :: Int -> Int -> Int -> IO ()
+asyncReadsWritesUnagiUnboxed writers readers n = do
+  let nNice = n - rem n (lcm writers readers)
+  (i,o) <- UU.newChan
+  rcvrs <- replicateM readers $ async $ replicateM_ (nNice `quot` readers) $ UU.readChan o
+  _ <- replicateM writers $ async $ replicateM_ (nNice `quot` writers) $ UU.writeChan i (0::Int)
+  mapM_ wait rcvrs
+
+asyncSumIntUnagiUnboxed :: Int -> IO Int
+asyncSumIntUnagiUnboxed n = do
+   (i,o) <- UU.newChan
+   let readerSum  0  !tot = return tot
+       readerSum !n' !tot = UU.readChan o >>= readerSum (n'-1) . (tot+)
+   _ <- async $ mapM_ (UU.writeChan i) [1..n] -- NOTE: partially-applied writeChan
+   readerSum n 0
+
 
 
 #ifdef COMPARE_BENCHMARKS

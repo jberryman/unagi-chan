@@ -21,8 +21,12 @@ library
   exposed-modules:     Control.Concurrent.Chan.Split
                      , Control.Concurrent.Chan.Split.Internal
                      , Control.Concurrent.Chan.Unagi
+                     , Control.Concurrent.Chan.Unagi.Unboxed
+
   other-modules:       Control.Concurrent.Chan.Unagi.Internal
+                     , Control.Concurrent.Chan.Unagi.Unboxed.Internal
                      , Data.Atomics.Counter.Fat
+
   ghc-options:        -Wall -funbox-strict-fields
   build-depends:       base < 5
                      , atomic-primops==0.6.0.5
