@@ -159,9 +159,6 @@ writeChan (InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) = \a-> mask_ $ do
     when (not success) $
         case peekTicket nonEmptyTkt of
              Blocking v -> putMVar v a
-             -- a reader was killed (async exception) such that if `a`
-             -- disappeared this might be observed to differ from the
-             -- semantics of Chan. Retry:
              _ -> error "Nearly Impossible! Expected Blocking"
   -- [1] the writer which arrives first to the first cell of a new segment is
   -- tasked (somewhat arbitrarily) with trying to pre-allocate the *next*
