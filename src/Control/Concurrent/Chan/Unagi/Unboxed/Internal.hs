@@ -87,8 +87,11 @@ data StreamHead a = StreamHead !Int !(Stream a)
 
 -- The array we actually store our Prim elements in
 newtype ElementArray a = ElementArray (P.MutableByteArray RealWorld)
--- TODO we could easily use 'vector' to support a wider array of primitive
+-- TODO 
+--   - we could easily use 'vector' to support a wider array of primitive
 --      elements here.
+--   - else test combining signal and element arrays into a single one that
+--      places signal cell next to element cell
 
 readElementArray :: (P.Prim a)=> ElementArray a -> Int -> IO a
 {-# INLINE readElementArray #-}
