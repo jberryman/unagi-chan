@@ -91,10 +91,12 @@ newtype ElementArray a = ElementArray (P.MutableByteArray RealWorld)
 --      elements here.
 
 readElementArray :: (P.Prim a)=> ElementArray a -> Int -> IO a
-readElementArray (ElementArray arr) = P.readByteArray arr
+{-# INLINE readElementArray #-}
+readElementArray (ElementArray arr) i = P.readByteArray arr i
 
 writeElementArray :: (P.Prim a)=> ElementArray a -> Int -> a -> IO ()
-writeElementArray (ElementArray arr) = P.writeByteArray arr
+{-# INLINE writeElementArray #-}
+writeElementArray (ElementArray arr) i a = P.writeByteArray arr i a
 
 -- We CAS on this, using Ints to signal (see below)
 type SignalIntArray = P.MutableByteArray RealWorld
@@ -234,7 +236,7 @@ writeChan (InChan ce) = \a-> mask_ $ do
          2 {- Blocking -} -> 
             case ce of
                  (ChanEnd _ _ b) -> writeBlocking b segIx a
-         1 -> error "Nearly Impossible! Expected Blocking"
+         1 {- Written -} -> error "Nearly Impossible! Expected Blocking"
          _ -> error "Invalid signal seen in writeChan!"
   -- [1] the writer which arrives first to the first cell of a new segment is
   -- tasked (somewhat arbitrarily) with trying to pre-allocate the *next*
