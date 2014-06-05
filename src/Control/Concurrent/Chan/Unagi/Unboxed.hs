@@ -21,6 +21,7 @@ module Control.Concurrent.Chan.Unagi.Unboxed (
 --   - this could be used (or forked) to implement an efficient MPSC concurrent
 --     ByteString or Text queue (where writes could be variable-sized chunks
 --     and we incrCounter accordingly) without too much trouble. Useful?
+--       - likewise a SPMC concurrent bytestring consumer?
 
 import Control.Concurrent.Chan.Unagi.Unboxed.Internal
 -- For 'writeList2Chan', as in vanilla Chan
