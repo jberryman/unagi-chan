@@ -15,10 +15,9 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
 --
 -- Internals exposed for testing.
 --
--- TODO CHECK DIFFERENT WRITE PATTERNS FOR CACHE W/ BYTE ARRAYS
---
 -- TODO Look at how ByteString is implemented; maybe that approach is better in
---      some ways, or perhaps we can use their Internals.
+--      some ways, or perhaps we can use their Internals? Probably need as this
+--      current relies on the GC
 
 import Control.Concurrent.MVar
 import Data.IORef
@@ -171,7 +170,7 @@ nextHighestPowerOfTwo n =
 segSource :: forall a. (P.Prim a)=> IO (SignalIntArray, ElementArray a) --ScopedTypeVariables
 {-# INLINE segSource #-}
 segSource = do
-    -- A largish pinned array seems like it would be the best choice here. TODO test unpinned
+    -- A largish pinned array seems like it would be the best choice here.
     sigArr <- P.newPinnedByteArray 
                 (P.sizeOf cellEmpty `unsafeShiftL` pOW) -- * sEGMENT_LENGTH
     eArr <- P.newPinnedByteArray 

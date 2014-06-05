@@ -22,6 +22,8 @@ module Control.Concurrent.Chan.Unagi.Unboxed (
 --     ByteString or Text queue (where writes could be variable-sized chunks
 --     and we incrCounter accordingly) without too much trouble. Useful?
 --       - likewise a SPMC concurrent bytestring consumer?
+--   - some of these workflows might benefit from prefetch, too, which would be
+--     fun
 
 import Control.Concurrent.Chan.Unagi.Unboxed.Internal
 -- For 'writeList2Chan', as in vanilla Chan
@@ -33,6 +35,7 @@ newChan :: Prim a=> IO (InChan a, OutChan a)
 newChan = newChanStarting (maxBound - 10) 
     -- lets us test counter overflow in tests and normal course of operation
 
+-- TODO This might benefit from prefetching.
 -- | Return a lazy list representing the contents of the supplied OutChan, much
 -- like System.IO.hGetContents.
 getChanContents :: Prim a=> OutChan a -> IO [a]
