@@ -90,8 +90,11 @@ newtype ElementArray a = ElementArray (P.MutableByteArray RealWorld)
 -- TODO 
 --   - we could easily use 'vector' to support a wider array of primitive
 --      elements here.
+--       - and what about Storable?
+--     see http://stackoverflow.com/q/4908880/176841
 --   - else test combining signal and element arrays into a single one that
---      places signal cell next to element cell
+--      places signal cell next to element cell, and use Addr to access?
+--      (see also TODOs under Stream)
 
 readElementArray :: (P.Prim a)=> ElementArray a -> Int -> IO a
 {-# INLINE readElementArray #-}
@@ -200,6 +203,11 @@ data Stream a =
            -- put here as we go, with threads cooperating to allocate new
            -- segments:
            !(IORef (NextSegment a))
+-- TODO 
+--   - we could replace Stream with a single funky MutableByteArray, even
+--     replacing the IORef with a stored Addr to the next segment, which is
+--     initialized to maxBound (an impossible value hopefully?) indicating
+--     NoSegment
 
 data NextSegment a = NoSegment | Next !(Stream a)
 
