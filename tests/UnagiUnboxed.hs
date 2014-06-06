@@ -1,9 +1,11 @@
-module Unagi (unagiMain) where
+module UnagiUnboxed (unagiUnboxedMain) where
 
 -- Unagi-chan-specific tests
+--
+-- Forked from tests/Unagi.hs at 337600f
 
-import Control.Concurrent.Chan.Unagi
-import qualified Control.Concurrent.Chan.Unagi.Internal as UI
+import Control.Concurrent.Chan.Unagi.Unboxed
+import qualified Control.Concurrent.Chan.Unagi.Unboxed.Internal as UI
 import Control.Monad
 import qualified Data.Primitive as P
 import Data.IORef
@@ -13,10 +15,11 @@ import Control.Concurrent.MVar
 import Control.Exception
 import Data.Atomics.Counter.Fat
 
-unagiMain :: IO ()
-unagiMain = do
+unagiUnboxedMain :: IO ()
+unagiUnboxedMain = do
     putStrLn "==================="
-    putStrLn "Testing Unagi details:"
+    putStrLn "Testing Unagi.Unboxed details:"
+    -- ------
     -- ------
     putStr "Smoke test at different starting offsets, spanning overflow... "
     mapM_ smoke $ [ (maxBound - UI.sEGMENT_LENGTH - 1) .. maxBound] 
@@ -65,44 +68,41 @@ smoke2 n = do
 
 correctFirstWrite :: Int -> IO ()
 correctFirstWrite n = do
-    (i,UI.OutChan (UI.ChanEnd _ _ arrRef)) <- UI.newChanStarting n
-    writeChan i ()
-    (UI.StreamHead _ (UI.Stream arr _)) <- readIORef arrRef
-    cell <- P.readArray arr 0
+    (i,UI.OutChan (UI.ChanEnd _ arrRef _)) <- UI.newChanStarting n
+    writeChan i (7::Int)
+    (UI.StreamHead _ (UI.Stream sigArr eArr _)) <- readIORef arrRef
+    cell <- UI.readElementArray eArr 0 :: IO Int
     case cell of
-         UI.Written () -> return ()
-         _ -> error "Expected a Write at index 0"
+         7 -> return ()
+         _ -> error "Expected a write at index 0 of 7"
+    -- TODO check sigArr
 
 -- check writes by doing a segment+1-worth of reads by hand
 -- also check that segments pre-allocated as expected
 correctInitialWrites :: Int -> IO ()
 correctInitialWrites startN = do
-    (i,(UI.OutChan (UI.ChanEnd _ _ arrRef))) <- UI.newChanStarting startN
+    (i,(UI.OutChan (UI.ChanEnd _ arrRef _))) <- UI.newChanStarting startN
     let writes = [0..UI.sEGMENT_LENGTH]
     mapM_ (writeChan i) writes
-    (UI.StreamHead _ (UI.Stream arr next)) <- readIORef arrRef
+    (UI.StreamHead _ (UI.Stream sigArr eArr next)) <- readIORef arrRef
     -- check all of first segment:
     forM_ (init writes) $ \ix-> do
-        cell <- P.readArray arr ix
+        cell <- UI.readElementArray eArr ix :: IO Int-- TODO something with sigArr
         case cell of
-             UI.Written n
-                | n == ix -> return ()
-                | otherwise -> error $ "Expected a Write at index "++(show ix)++" of same value but got "++(show n)
-             _ -> error $ "Expected a Write at index "++(show ix)
+             n  | n == ix -> return ()
+                | otherwise -> error $ "Expected a write at index "++(show ix)++" of same value but got "++(show n)
     -- check last write:
     lastSeg  <- readIORef next
     case lastSeg of
-         (UI.Next (UI.Stream arr2 next2)) -> do
-            cell <- P.readArray arr2 0
+         (UI.Next (UI.Stream sigArr2 eArr2 next2)) -> do
+            cell <- UI.readElementArray eArr2 0 :: IO Int
             case cell of
-                 UI.Written n 
-                    | n == last writes -> return ()
+                 n  | n == last writes -> return ()
                     | otherwise -> error $ "Expected last write at index "++(show $ last writes)++" of same value but got "++(show n)
-                 _ -> error "Expected a last Write"
             -- check pre-allocation:
             n2 <- readIORef next2
             case n2 of 
-                (UI.Next (UI.Stream _ next3)) -> do
+                (UI.Next (UI.Stream _ _ next3)) -> do
                     n3 <- readIORef next3
                     case n3 of
                         UI.NoSegment -> return ()
@@ -160,8 +160,8 @@ checkDeadlocksReaderUnagi times = do
          writeChan i 2 `onException` ( putStrLn "Exception from second writeChan!")
          finalRead <- readChan o `onException` ( putStrLn "Exception from final readChan!")
          
-         oCnt <- readCounter $ (\(UI.OutChan(UI.ChanEnd _ cntr _))-> cntr) o
-         iCnt <- readCounter $ (\(UI.InChan _ (UI.ChanEnd _ cntr _))-> cntr) i
+         oCnt <- readCounter $ (\(UI.OutChan(UI.ChanEnd cntr _ _))-> cntr) o
+         iCnt <- readCounter $ (\(UI.InChan (UI.ChanEnd cntr _ _))-> cntr) i
          unless (iCnt == numPreloaded + 1) $ 
             error "The InChan counter doesn't match what we'd expect from numPreloaded!"
 

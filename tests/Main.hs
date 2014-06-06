@@ -14,6 +14,7 @@ import DupChan
 -- implementation-specific tests:
 import Atomics
 import Unagi
+import UnagiUnboxed
 
 main :: IO ()
 main = do 
@@ -47,3 +48,4 @@ main = do
 
     -- unagi-specific tests
     unagiMain
+    unagiUnboxedMain

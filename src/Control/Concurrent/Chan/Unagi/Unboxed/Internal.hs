@@ -5,6 +5,7 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
 #endif
     (sEGMENT_LENGTH
     , InChan(..), OutChan(..), ChanEnd(..), Cell, Stream(..), ElementArray(..), SignalIntArray
+    , readElementArray, writeElementArray
     , NextSegment(..), StreamHead(..)
     , newChanStarting, writeChan, readChan, readChanOnException
     )

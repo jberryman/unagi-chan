@@ -2,43 +2,56 @@
 module Smoke where
 
 import Control.Monad
-import Control.Concurrent
-import qualified Control.Concurrent.Chan.Unagi as U
+import Control.Concurrent(forkIO)
 import qualified Control.Concurrent.Chan as C
-
 import Data.List
+
+import Implementations
 
 smokeMain :: IO ()
 smokeMain = do
-    putStr "FIFO smoke test... "
-    fifoSmoke 100000
+    putStrLn "==================="
+    putStrLn "Testing Unagi:"
+    -- ------
+    putStr "    FIFO smoke test... "
+    fifoSmoke unagiImpl 100000
     putStrLn "OK"
     -- ------
-    testContention 2 2 1000000
+    testContention unagiImpl 2 2 1000000
 
-fifoSmoke :: Int -> IO ()
-fifoSmoke n = do
-    (i,o) <- U.newChan
-    mapM_ (U.writeChan i) [1..n]
-    nsOut <- replicateM n $ U.readChan o
+    putStrLn "==================="
+    putStrLn "Testing Unagi.Unboxed:"
+    -- ------
+    putStr "    FIFO smoke test... "
+    fifoSmoke unboxedUnagiImpl 100000
+    putStrLn "OK"
+    -- ------
+    testContention unboxedUnagiImpl 2 2 1000000
+
+
+fifoSmoke :: Implementation inc outc Int -> Int -> IO ()
+fifoSmoke (newChan,writeChan,readChan) n = do
+    (i,o) <- newChan
+    mapM_ (writeChan i) [1..n]
+    nsOut <- replicateM n $ readChan o
     unless (nsOut == [1..n]) $
         error "Cough!"
 
-testContention :: Int -> Int -> Int -> IO ()
-testContention writers readers n = do
+testContention :: Implementation inc outc Int -> Int -> Int -> Int -> IO ()
+testContention (newChan,writeChan,readChan) writers readers n = do
   let nNice = n - rem n (lcm writers readers)
              -- e.g. [[1,2,3,4,5],[6,7,8,9,10]] for 2 2 10
       groups = map (\i-> [i.. i - 1 + nNice `quot` writers]) $ [1, (nNice `quot` writers + 1).. nNice]
                      -- force list; don't change --
   out <- C.newChan
 
-  (i,o) <- U.newChan
+  (i,o) <- newChan
   -- some will get blocked indefinitely:
   void $ replicateM readers $ forkIO $ forever $
-      U.readChan o >>= C.writeChan out
+      readChan o >>= C.writeChan out
   
   putStrLn $ "Sending "++(show $ length $ concat groups)++" messages, with "++(show readers)++" readers and "++(show writers)++" writers."
-  mapM_ (forkIO . mapM_ (U.writeChan i)) groups
+  mapM_ (forkIO . mapM_ (writeChan i)) groups
 
   ns <- replicateM nNice (C.readChan out)
   isEmpty <- C.isEmptyChan out
