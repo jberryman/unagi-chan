@@ -7,6 +7,7 @@ import Data.IORef
 import Control.Monad
 import qualified Data.Set as Set
 import Data.List
+import Data.Bits
 
 atomicsMain :: IO ()
 atomicsMain = do
@@ -39,13 +40,20 @@ counterSane = do
     unless (n2 == 1338 && n2' == 1338) $ error "incrCounter magnificently broken"
 
 cHUNK_SIZE, maxInt, minInt :: Int
-cHUNK_SIZE = 32
+cHUNK_SIZE = 32 -- MUST REMAIN POWER OF TWO for now
 maxInt = maxBound
 minInt = minBound
 -- Test some properties of our counter we'd like to assume:
 testCounterOverflow :: IO ()
 testCounterOverflow = do
-    let ourMod = mod -- or something more fancy?
+    let x `ourMod` y = 
+           -- also do a little sanity checking for the bitwise mod over Int
+           -- that we use heavily, and expect in some cases to roll over w/out
+           -- breaks:
+           let xmy = x .&. (y-1)
+            in if xmy == x `mod` y
+                    then xmy
+                    else error "Our bitwise mod isn't working the way we expect in testCounterOverflow"
     cntr <- newCounter (maxInt - (cHUNK_SIZE `div` 2)) 
     spanningCntr <- replicateM cHUNK_SIZE (incrCounter 1 cntr)
     -- make sure our test is working
