@@ -3,6 +3,7 @@ module Main
 
 
 import qualified Control.Concurrent.Chan.Unagi as U
+import qualified Control.Concurrent.Chan.Unagi.Unboxed as UU
 #ifdef COMPARE_BENCHMARKS
 import Control.Concurrent.Chan
 import Control.Concurrent.STM
@@ -23,6 +24,7 @@ main = do
 #endif
 
   (fastEmptyUI,fastEmptyUO) <- U.newChan
+  (fastEmptyUUI,fastEmptyUUO) <- UU.newChan
 #ifdef COMPARE_BENCHMARKS
   chanEmpty <- newChan
   tqueueEmpty <- newTQueueIO
@@ -35,6 +37,7 @@ main = do
     -- involved in getting a single message in and out
     [ bgroup "Latency micro-benchmark" $
         [ bench "chan-split-fast Unagi" (U.writeChan fastEmptyUI () >> U.readChan fastEmptyUO)
+        , bench "chan-split-fast Unagi.Unboxed" (UU.writeChan fastEmptyUUI (0::Int) >> UU.readChan fastEmptyUUO) -- TODO comparing Int writing to (). Change?
 #ifdef COMPARE_BENCHMARKS
         , bench "Chan" (writeChan chanEmpty () >> readChan chanEmpty)
         , bench "TQueue" (atomically (writeTQueue tqueueEmpty () >>  readTQueue tqueueEmpty))
@@ -49,6 +52,7 @@ main = do
     , bgroup ("Throughput with "++show n++" messages") $
         [ bgroup "sequential write all then read all" $
               [ bench "chan-split-fast Unagi" $ runtestSplitChanU1 n
+              , bench "chan-split-fast Unagi.Unboxed" $ runtestSplitChanUU1 n
 #ifdef COMPARE_BENCHMARKS
               , bench "Chan" $ runtestChan1 n
               , bench "TQueue" $ runtestTQueue1 n
@@ -58,6 +62,7 @@ main = do
               ]
         , bgroup "repeated write some, read some" $ 
               [ bench "chan-split-fast Unagi" $ runtestSplitChanU2 n
+              , bench "chan-split-fast Unagi.Unboxed" $ runtestSplitChanUU2 n
 #ifdef COMPARE_BENCHMARKS
               , bench "Chan" $ runtestChan2 n
               , bench "TQueue" $ runtestTQueue2 n
@@ -81,6 +86,23 @@ runtestSplitChanU2 n = do
   replicateM_ 1000 $ do
     replicateM_ n1000 $ U.writeChan i ()
     replicateM_ n1000 $ U.readChan o
+
+
+-- chan-split-fast Unagi Unboxed --
+-- TODO comparing () to Int. Change everywhere?
+runtestSplitChanUU1, runtestSplitChanUU2 :: Int -> IO ()
+runtestSplitChanUU1 n = do
+  (i,o) <- UU.newChan
+  replicateM_ n $ UU.writeChan i (0::Int)
+  replicateM_ n $ UU.readChan o
+
+runtestSplitChanUU2 n = do
+  (i,o) <- UU.newChan
+  let n1000 = n `quot` 1000
+  replicateM_ 1000 $ do
+    replicateM_ n1000 $ UU.writeChan i (0::Int)
+    replicateM_ n1000 $ UU.readChan o
+
 
 
 

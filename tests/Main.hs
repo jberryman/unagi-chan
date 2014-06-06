@@ -7,14 +7,14 @@ import Control.Exception
 
 -- implementation-agnostic tests:
 import Qsem001
-import Chan002
-import Chan003
+import Deadlocks
 import Smoke
 import DupChan
 
 -- implementation-specific tests:
 import Atomics
 import Unagi
+import UnagiUnboxed
 
 main :: IO ()
 main = do 
@@ -33,9 +33,9 @@ main = do
 
     -- test important properties of our atomic-primops:
     atomicsMain
- 
-    fifoSmoke 100000
-    testContention 2 2 1000000
+
+    -- do things catch fire?
+    smokeMain
 
     -- dupChan tests
     dupChanMain
@@ -44,12 +44,8 @@ main = do
     defaultMainQSem
 
     -- check for deadlocks:
-    let tries = 50000
-    -- TODO add back chan-agnostic basic test here
-    putStrLn $ "Checking for deadlocks from killed reader, x"++show tries
-    checkDeadlocksReader tries
-    putStrLn $ "Checking for deadlocks from killed writer, x"++show tries
-    checkDeadlocksWriter tries
+    deadlocksMain
 
     -- unagi-specific tests
     unagiMain
+    unagiUnboxedMain

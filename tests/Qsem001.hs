@@ -6,6 +6,7 @@ import qualified Control.Concurrent.Chan.Unagi as U
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Monad
 
+-- USELESS AND DEPRECATED
 
 -- --------------------------
 -- NOTE: these are tests for QSem, but we'd like to be sure our Chan doesn't
