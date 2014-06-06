@@ -7,7 +7,7 @@ module UnagiUnboxed (unagiUnboxedMain) where
 import Control.Concurrent.Chan.Unagi.Unboxed
 import qualified Control.Concurrent.Chan.Unagi.Unboxed.Internal as UI
 import Control.Monad
-import qualified Data.Primitive as P
+--import qualified Data.Primitive as P
 import Data.IORef
 
 import Control.Concurrent(forkIO,threadDelay)

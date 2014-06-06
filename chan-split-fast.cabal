@@ -22,9 +22,11 @@ library
                      , Control.Concurrent.Chan.Split.Internal
                      , Control.Concurrent.Chan.Unagi
                      , Control.Concurrent.Chan.Unagi.Unboxed
+                     --, Control.Concurrent.Chan.Tako
 
   other-modules:       Control.Concurrent.Chan.Unagi.Internal
                      , Control.Concurrent.Chan.Unagi.Unboxed.Internal
+                     , Control.Concurrent.Chan.Tako.Bounded.Internal
                      , Data.Atomics.Counter.Fat
 
   ghc-options:        -Wall -funbox-strict-fields

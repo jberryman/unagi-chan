@@ -12,7 +12,7 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
     where
 
 -- Forked from src/Control/Concurrent/Chan/Unagi/Internal.hs at 443465. See
--- that implementation for additional details.
+-- that implementation for additional details and notes which we omit here.
 --
 -- Internals exposed for testing.
 --
@@ -20,7 +20,6 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
 --      some ways, or perhaps we can use their Internals? Probably need as this
 --      current relies on the GC
 
-import Control.Concurrent.MVar
 import Data.IORef
 import Control.Exception
 import Control.Monad.Primitive(RealWorld)
@@ -33,18 +32,7 @@ import Data.Bits
 import Data.Typeable(Typeable)
 import GHC.Exts(inline)
 import GHC.Conc(getNumProcessors)
-
--- TODO WRT GARBAGE COLLECTION
---  This can lead to large amounts of memory use in theory:
---   1. overhead of pre-allocated arrays and fat counter
---   2. already-read elements in arrays not-yet GC'd
---   3. array and element overhead from a writer/reader delayed (many
---      intermediate chunks held)
---
--- Ideas:
---   - hold weak reference to previous segment, and when we move the head
---     pointer, update `next` to point to this new segment (if it is still
---     around?)
+import qualified Control.Concurrent.Chan.Tako.Bounded.Internal as TBI
 
 
 -- Number of reads on which to spin for new segment creation.
@@ -65,10 +53,6 @@ instance Eq (OutChan a) where
     (OutChan (ChanEnd _ headA _)) == (OutChan (ChanEnd _ headB _))
         = headA == headB
 
--- TODO POTENTIAL CPP FLAGS (or functions)
---   - Strict element (or lazy? maybe also reveal a writeChan' when relevant?)
---   - sEGMENT_LENGTH
---   - reads that clear the element immediately (or export as a special function?)
 
 -- InChan & OutChan are mostly identical, sharing a stream, but with
 -- independent counters
@@ -79,7 +63,7 @@ data ChanEnd a =
             -- is greater than the counter value
             !(IORef (StreamHead a))
             -- a simple blocking queue
-            !(BlockingChan a)
+            !(TBI.MVarArray a)
     deriving Typeable
 
 data StreamHead a = StreamHead !Int !(Stream a)
@@ -126,46 +110,6 @@ cellWritten = 1
 cellBlocking = 2
 
 
--- -------------------------------- TODO TEST
--- Factor out the blocking stuff in case we want to replace this later.
-data BlockingChan a = BlockingChan !Int !(P.Array (MVar a))
-
-newBlockingChan :: IO (BlockingChan a)
-newBlockingChan = do
-    -- somewhat arbitrary:
-    !size <- nextHighestPowerOfTwo . (*2) <$> getNumProcessors
-    let !sizeMn1 = size - 1
-    mArr <- P.newArray size undefined
-    forM_ [0..sizeMn1] $ \i->
-        newEmptyMVar >>= P.writeArray mArr i
-
-    -- in write/readBlocking we're passing segIx, the counter value modulo
-    -- segment size, so we'd like this to hold. But not correctness issue.
-    assert (size <= sEGMENT_LENGTH && sEGMENT_LENGTH `rem` size == 0) $
-        BlockingChan sizeMn1 <$> P.unsafeFreezeArray mArr
-
--- We pass the Int from the atomic counter to be taken modulo the size of the
--- array to determine specific bucket to put/take from:
-writeBlocking :: BlockingChan a -> Int -> a -> IO ()
-{-# INLINE writeBlocking #-}
-writeBlocking (BlockingChan sizeMn1 arr) n = 
-    assert (n >= 0) $
-      putMVar (P.indexArray arr (n .&. sizeMn1))
-
-readBlocking :: BlockingChan a -> Int -> IO a
-{-# INLINE readBlocking #-}
-readBlocking (BlockingChan sizeMn1 arr) n =
-    assert (n >= 0) $
-      takeMVar (P.indexArray arr (n .&. sizeMn1))
-
--- Not particularly fast; if needs moar fast see
---   http://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
-nextHighestPowerOfTwo :: Int -> Int
-nextHighestPowerOfTwo 0 = 1
-nextHighestPowerOfTwo n =  
-    2 ^ (ceiling (logBase 2 $ fromIntegral $ abs n :: Float) :: Int)
--- --------------------------------
-
 
 -- TODO TEST
 segSource :: forall a. (P.Prim a)=> IO (SignalIntArray, ElementArray a) --ScopedTypeVariables
@@ -180,21 +124,10 @@ segSource = do
     return (sigArr, ElementArray eArr)
 
 
--- Constant for now: back-of-envelope considerations:
---   - making most of constant factor for cloning array of *any* size
---   - make most of overheads of moving to the next segment, etc.
---   - provide enough runway for creating next segment when 32 simultaneous writers 
---   - the larger this the larger one-time cost for the lucky writer
---   - don't fragment the pinned heap section
---
 sEGMENT_LENGTH :: Int
 {-# INLINE sEGMENT_LENGTH #-}
 sEGMENT_LENGTH = 1024 -- NOTE: THIS REMAIN A POWER OF 2!
 
--- NOTE In general we'll have two segments allocated at any given time in
--- addition to the segment template, so in the worst case, when the program
--- exits we will have allocated ~ 3 segments extra memory than was actually
--- required.
 
 data Stream a = 
     Stream !SignalIntArray
@@ -216,12 +149,18 @@ newChanStarting :: (P.Prim a)=> Int -> IO (InChan a, OutChan a)
 {-# INLINE newChanStarting #-}
 newChanStarting !startingCellOffset = do
     stream <- uncurry Stream <$> segSource <*> newIORef NoSegment
-    blockingChan <- newBlockingChan
+    -- somewhat arbitrary:
+    vs <- (*2) <$> getNumProcessors
+    mvarArray <- TBI.newMVarArray vs -- NOTE: rounds up to nearest power of two
     let end = ChanEnd
                   <$> newCounter (startingCellOffset - 1)
                   <*> newIORef (StreamHead startingCellOffset stream)
-                  <*> pure blockingChan
-    liftA2 (,) (InChan <$> end) (OutChan <$> end)
+                  <*> pure mvarArray
+    -- in write/readMVarArray we're passing segIx, the counter value modulo
+    -- segment size, so we'd like this to hold. But not correctness issue.
+    assert (let !size = TBI.nextHighestPowerOfTwo vs 
+             in size <= sEGMENT_LENGTH && sEGMENT_LENGTH `rem` size == 0) $
+        liftA2 (,) (InChan <$> end) (OutChan <$> end)
 
 
 writeChan :: (P.Prim a)=> InChan a -> a -> IO ()
@@ -246,7 +185,7 @@ writeChan (InChan ce) = \a-> mask_ $ do
          0 {- Empty -} -> return ()
          2 {- Blocking -} -> 
             case ce of
-                 (ChanEnd _ _ b) -> writeBlocking b segIx a
+                 (ChanEnd _ _ b) -> TBI.writeMVarArray b segIx a
          1 {- Written -} -> error "Nearly Impossible! Expected Blocking"
          _ -> error "Invalid signal seen in writeChan!"
   -- [1] the writer which arrives first to the first cell of a new segment is
@@ -257,17 +196,6 @@ writeChan (InChan ce) = \a-> mask_ $ do
   -- (hopefully the vast majority of the time) we avoid a throughput hit.
 
 
--- We would like our queue to behave like Chan in that an async exception
--- raised in a reader known to be blocked or about to block on an empty queue
--- never results in a lost message; this matches our simple intuition about the
--- mechanics of a queue: if you're last in line for a cupcake and have to leave
--- you wouldn't expect the cake that would have gone to you to disappear.
---
--- But there are other systems that a busy cake shop might use that you could
--- easily imagine resulting in a lost cake, and that's a different question
--- from whether cakes are given to well-behaved customers in the order they
--- came out of the oven, or whether a customer leaving at the wrong moment
--- might cause the cake shop to burn down...
 readChanOnExceptionUnmasked :: (P.Prim a)=> (IO a -> IO a) -> OutChan a -> IO a
 {-# INLINE readChanOnExceptionUnmasked #-}
 readChanOnExceptionUnmasked h = \(OutChan ce)-> do
@@ -279,7 +207,7 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
          0 {- Empty -} -> 
             case ce of
                  (ChanEnd _ _ b) -> 
-                    inline h $ readBlocking b segIx
+                    inline h $ TBI.readMVarArray b segIx
          1 {- Written -} -> readElementArray eArr segIx
          2 {- Blocking -} -> error "Impossible! Only expecting Empty or Written"
          _ -> error "Invalid signal seen in readChanOnExceptionUnmasked!"
