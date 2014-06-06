@@ -1,10 +1,21 @@
-module Chan002 where
+module Deadlocks where
 
 import Control.Concurrent
 import qualified Control.Concurrent.Chan.Unagi as U
 import Control.Exception
 import Control.Monad
 
+
+-- -- Chan002.hs -- --
+
+
+deadlocksMain :: IO ()
+deadlocksMain = do
+    let tries = 50000
+    putStrLn $ "Checking for deadlocks from killed reader, x"++show tries
+    checkDeadlocksReader tries
+    putStrLn $ "Checking for deadlocks from killed writer, x"++show tries
+    checkDeadlocksWriter tries
 
 -- TODO we'll have this bind to arguments: newChan readChan writeChan n
 --      and pass qualified names as we add tests. Do the same in other generic
@@ -51,3 +62,23 @@ checkDeadlocksReader times = do
                 | otherwise -> putStr "*" >> run (retries+1) n
               _ -> error "Fix checkDeadlocksReader test; not 0, 1, or 2"
   run 0 times
+
+
+-- -- Chan003.hs -- --
+
+
+-- test for deadlocks from async exceptions raised in writer
+checkDeadlocksWriter :: Int -> IO ()
+checkDeadlocksWriter n = void $
+  replicateM_ n $ do
+         (i,o) <- U.newChan
+         wStart <- newEmptyMVar
+         wid <- forkIO (putMVar wStart () >> ( forever $ U.writeChan i (0::Int)) )
+         -- wait for writer to start
+         takeMVar wStart >> threadDelay 1
+         throwTo wid ThreadKilled
+         -- did killing the writer damage queue for writes or reads?
+         U.writeChan i (1::Int)
+         z <- U.readChan o
+         unless (z == 0) $
+            error "Writer never got a chance to write!"

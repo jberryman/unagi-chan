@@ -8,15 +8,21 @@ import qualified Control.Concurrent.Chan as C
 
 import Data.List
 
+smokeMain :: IO ()
+smokeMain = do
+    putStr "FIFO smoke test... "
+    fifoSmoke 100000
+    putStrLn "OK"
+    -- ------
+    testContention 2 2 1000000
+
 fifoSmoke :: Int -> IO ()
 fifoSmoke n = do
-    putStr "FIFO smoke test... "
     (i,o) <- U.newChan
     mapM_ (U.writeChan i) [1..n]
     nsOut <- replicateM n $ U.readChan o
-    if nsOut == [1..n]
-        then putStrLn "OK"
-        else error "Cough!"
+    unless (nsOut == [1..n]) $
+        error "Cough!"
 
 testContention :: Int -> Int -> Int -> IO ()
 testContention writers readers n = do
