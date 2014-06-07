@@ -32,7 +32,7 @@ import Data.Bits
 import Data.Typeable(Typeable)
 import GHC.Exts(inline)
 import GHC.Conc(getNumProcessors)
-import qualified Control.Concurrent.Chan.Tako.Bounded.Internal as TBI
+import Utilities
 
 
 -- Number of reads on which to spin for new segment creation.
@@ -63,7 +63,7 @@ data ChanEnd a =
             -- is greater than the counter value
             !(IORef (StreamHead a))
             -- a simple blocking queue
-            !(TBI.MVarArray a)
+            !(MVarArray a)
     deriving Typeable
 
 data StreamHead a = StreamHead !Int !(Stream a)
@@ -151,14 +151,14 @@ newChanStarting !startingCellOffset = do
     stream <- uncurry Stream <$> segSource <*> newIORef NoSegment
     -- somewhat arbitrary:
     vs <- (*2) <$> getNumProcessors
-    mvarArray <- TBI.newMVarArray vs -- NOTE: rounds up to nearest power of two
+    mvarArray <- newMVarArray vs -- NOTE: rounds up to nearest power of two
     let end = ChanEnd
                   <$> newCounter (startingCellOffset - 1)
                   <*> newIORef (StreamHead startingCellOffset stream)
                   <*> pure mvarArray
-    -- in write/readMVarArray we're passing segIx, the counter value modulo
+    -- in put/takeMVarArray we're passing segIx, the counter value modulo
     -- segment size, so we'd like this to hold. But not correctness issue.
-    assert (let !size = TBI.nextHighestPowerOfTwo vs 
+    assert (let !size = nextHighestPowerOfTwo vs 
              in size <= sEGMENT_LENGTH && sEGMENT_LENGTH `rem` size == 0) $
         liftA2 (,) (InChan <$> end) (OutChan <$> end)
 
@@ -185,7 +185,7 @@ writeChan (InChan ce) = \a-> mask_ $ do
          0 {- Empty -} -> return ()
          2 {- Blocking -} -> 
             case ce of
-                 (ChanEnd _ _ b) -> TBI.writeMVarArray b segIx a
+                 (ChanEnd _ _ b) -> putMVarArray b segIx a
          1 {- Written -} -> error "Nearly Impossible! Expected Blocking"
          _ -> error "Invalid signal seen in writeChan!"
   -- [1] the writer which arrives first to the first cell of a new segment is
@@ -207,7 +207,7 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
          0 {- Empty -} -> 
             case ce of
                  (ChanEnd _ _ b) -> 
-                    inline h $ TBI.readMVarArray b segIx
+                    inline h $ takeMVarArray b segIx
          1 {- Written -} -> readElementArray eArr segIx
          2 {- Blocking -} -> error "Impossible! Only expecting Empty or Written"
          _ -> error "Invalid signal seen in readChanOnExceptionUnmasked!"

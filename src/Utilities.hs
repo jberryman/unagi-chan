@@ -1,7 +1,10 @@
 {-# LANGUAGE BangPatterns  #-}
-module Control.Concurrent.Chan.Tako.Bounded.Internal (
+module Utilities (
+    -- * Utility Chans
+    -- ** MVar Arrays
       MVarArray()
-    , newMVarArray , writeMVarArray , readMVarArray
+    , newMVarArray , putMVarArray , takeMVarArray
+    -- ** Other stuff
     , nextHighestPowerOfTwo
     ) where
 
@@ -32,16 +35,15 @@ newMVarArray !sizeDirty = do
 
     MVarArray sizeMn1 <$> P.unsafeFreezeArray mArr
 
--- TODO rename to take/put:
 -- Put to the index specified, wrapping if larger than array; negative `n` OK.
-writeMVarArray :: MVarArray a -> Int -> a -> IO ()
-{-# INLINE writeMVarArray #-}
-writeMVarArray !(MVarArray sizeMn1 arr) !n = 
+putMVarArray :: MVarArray a -> Int -> a -> IO ()
+{-# INLINE putMVarArray #-}
+putMVarArray !(MVarArray sizeMn1 arr) !n = 
       putMVar (P.indexArray arr (n .&. sizeMn1))
 
-readMVarArray :: MVarArray a -> Int -> IO a
-{-# INLINE readMVarArray #-}
-readMVarArray !(MVarArray sizeMn1 arr) !n =
+takeMVarArray :: MVarArray a -> Int -> IO a
+{-# INLINE takeMVarArray #-}
+takeMVarArray !(MVarArray sizeMn1 arr) !n =
       takeMVar (P.indexArray arr (n .&. sizeMn1))
 
 -- Not particularly fast; if needs moar fast see
