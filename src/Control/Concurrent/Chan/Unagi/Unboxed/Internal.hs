@@ -16,9 +16,19 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
 --
 -- Internals exposed for testing.
 --
--- TODO Look at how ByteString is implemented; maybe that approach is better in
---      some ways, or perhaps we can use their Internals? Probably need as this
---      current relies on the GC
+-- TODO 
+--   - Look at how ByteString is implemented; maybe that approach with
+--     ForeignPtr is better in some ways, or perhaps we can use their Internals?
+--       - Also 'vector' lib
+--
+--   - some of these workflows might benefit from prefetch, which would be fun
+--       - getChanContents
+--       - after a read to the last of a cache-line, prefetch next (this might
+--         help streaming workflows up to certain number of threads, and
+--         hopefully not harm performance much otherwise)
+--       - future single-writer scenarios
+--          - any benefit for multiple writers?
+
 
 import Data.IORef
 import Control.Exception
