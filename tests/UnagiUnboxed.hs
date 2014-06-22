@@ -68,9 +68,9 @@ smoke2 n = do
 
 correctFirstWrite :: Int -> IO ()
 correctFirstWrite n = do
-    (i,UI.OutChan (UI.ChanEnd _ arrRef _)) <- UI.newChanStarting n
+    (i,UI.OutChan (UI.ChanEnd _ arrRef)) <- UI.newChanStarting n
     writeChan i (7::Int)
-    (UI.StreamHead _ (UI.Stream sigArr eArr _)) <- readIORef arrRef
+    (UI.StreamHead _ (UI.Stream sigArr eArr _ _)) <- readIORef arrRef
     cell <- UI.readElementArray eArr 0 :: IO Int
     case cell of
          7 -> return ()
@@ -81,10 +81,10 @@ correctFirstWrite n = do
 -- also check that segments pre-allocated as expected
 correctInitialWrites :: Int -> IO ()
 correctInitialWrites startN = do
-    (i,(UI.OutChan (UI.ChanEnd _ arrRef _))) <- UI.newChanStarting startN
+    (i,(UI.OutChan (UI.ChanEnd _ arrRef))) <- UI.newChanStarting startN
     let writes = [0..UI.sEGMENT_LENGTH]
     mapM_ (writeChan i) writes
-    (UI.StreamHead _ (UI.Stream sigArr eArr next)) <- readIORef arrRef
+    (UI.StreamHead _ (UI.Stream sigArr eArr _ next)) <- readIORef arrRef
     -- check all of first segment:
     forM_ (init writes) $ \ix-> do
         cell <- UI.readElementArray eArr ix :: IO Int-- TODO something with sigArr
@@ -94,7 +94,7 @@ correctInitialWrites startN = do
     -- check last write:
     lastSeg  <- readIORef next
     case lastSeg of
-         (UI.Next (UI.Stream sigArr2 eArr2 next2)) -> do
+         (UI.Next (UI.Stream sigArr2 eArr2 _ next2)) -> do
             cell <- UI.readElementArray eArr2 0 :: IO Int
             case cell of
                  n  | n == last writes -> return ()
@@ -102,7 +102,7 @@ correctInitialWrites startN = do
             -- check pre-allocation:
             n2 <- readIORef next2
             case n2 of 
-                (UI.Next (UI.Stream _ _ next3)) -> do
+                (UI.Next (UI.Stream _ _ _ next3)) -> do
                     n3 <- readIORef next3
                     case n3 of
                         UI.NoSegment -> return ()
@@ -160,8 +160,8 @@ checkDeadlocksReaderUnagi times = do
          writeChan i 2 `onException` ( putStrLn "Exception from second writeChan!")
          finalRead <- readChan o `onException` ( putStrLn "Exception from final readChan!")
          
-         oCnt <- readCounter $ (\(UI.OutChan(UI.ChanEnd cntr _ _))-> cntr) o
-         iCnt <- readCounter $ (\(UI.InChan (UI.ChanEnd cntr _ _))-> cntr) i
+         oCnt <- readCounter $ (\(UI.OutChan(UI.ChanEnd cntr _))-> cntr) o
+         iCnt <- readCounter $ (\(UI.InChan (UI.ChanEnd cntr _))-> cntr) i
          unless (iCnt == numPreloaded + 1) $ 
             error "The InChan counter doesn't match what we'd expect from numPreloaded!"
 

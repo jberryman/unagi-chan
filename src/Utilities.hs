@@ -1,50 +1,85 @@
 {-# LANGUAGE BangPatterns  #-}
 module Utilities (
     -- * Utility Chans
-    -- ** MVar Arrays
-      MVarArray()
-    , newMVarArray , putMVarArray , takeMVarArray
+    -- ** Indexed MVars
+      IndexedMVar()
+    , newIndexedMVar, putMVarIx, readMVarIx
     -- ** Other stuff
     , nextHighestPowerOfTwo
     ) where
 
 import Control.Concurrent.MVar
 import Control.Exception
-import qualified Data.Primitive as P
-import Control.Monad
 import Control.Applicative
 import Data.Bits
 import Data.Word
+import Data.Atomics
+import Data.IORef
+import Control.Monad
+
+-- For now: a reverse-ordered assoc list; an IntMap might be better
+newtype IndexedMVar a = IndexedMVar (IORef [(Int, MVar a)])
+
+newIndexedMVar :: IO (IndexedMVar a)
+newIndexedMVar = IndexedMVar <$> newIORef []
 
 
 
--- We use this as part of some other implementations as well as Tako.Bounded
--- TODO more efficient unboxed implementation possible with CMM?
-data MVarArray a = MVarArray !Int !(P.Array (MVar a))
---                              \ array size - 1, for bitwise mod
+-- these really suck;sorry.
+readMVarIx :: IndexedMVar a -> Int -> IO a
+{-# INLINE readMVarIx #-}
+readMVarIx (IndexedMVar v) i = do
+    -- we expect to have to create this, so do optimistically:
+    mv <- newEmptyMVar
+    tk0 <- readForCAS v
+    let go tk = do
+            let !xs = peekTicket tk
+            case findInsert i mv xs of
+                 Left alreadyPresentMVar -> readMVar alreadyPresentMVar
+                 Right xs' -> do 
+                    (success,newTk) <- casIORef v tk xs'
+                    if success 
+                        then readMVar mv
+                        else go newTk
+    go tk0
 
--- A new array of MVars of the given size, rounded up to the next power of two
--- TODO maybe a lazy IO newMVar version for large bounded channels
-newMVarArray :: Int -> IO (MVarArray a)
-newMVarArray !sizeDirty = do
-    let !size = nextHighestPowerOfTwo sizeDirty
-        !sizeMn1 = size - 1
-    mArr <- P.newArray size undefined
-    forM_ [0..sizeMn1] $ \i->
-        newEmptyMVar >>= P.writeArray mArr i
+findInsert :: Int -> MVar a -> [(Int,MVar a)] -> Either (MVar a) [(Int,MVar a)]
+{-# INLINE findInsert #-}
+findInsert i mv = ins where
+    ins [] = Right [a] 
+    ins xss@((i',x):xs) = case compare i i' of
+                    GT -> Right $ (i,mv):xss
+                    EQ -> Left x
+                    LT -> fmap ((i',x):) $ ins xs
 
-    MVarArray sizeMn1 <$> P.unsafeFreezeArray mArr
+find :: Int -> [(Int,MVar a)] -> Maybe (MVar a)
+{-# INLINE find #-}
+find k = go where
+    go [] = Nothing
+    go ((i',x):xs) | i == i' = Just x
+                   | i < i' = Nothing
+                   | otherwise = go xs
 
--- Put to the index specified, wrapping if larger than array; negative `n` OK.
-putMVarArray :: MVarArray a -> Int -> a -> IO ()
-{-# INLINE putMVarArray #-}
-putMVarArray !(MVarArray sizeMn1 arr) !n = 
-      putMVar (P.indexArray arr (n .&. sizeMn1))
+putMVarIx :: IndexedMVar a -> Int -> a -> IO ()
+{-# INLINE putMVarIx #-}
+putMVarIx (IndexedMVar v) i a = do
+    tk0 <- readForCAS v
+    case find i $ peekTicket tk0 of
+         Just mv -> putMVar mv a
+         Nothing -> do
+            mv <- newMVar a
+            let go tk = do
+                    let !xs = peekTicket tk
+                    (success,newTk) <- casIORef v tk ((i,mv):xs)
+                    unless success $ 
+                        case findInsert i mv $ peekTicket newTk of
+                             Left alreadyPresentMVar -> 
+                                putMVar alreadyPresentMVar a
+                             Right xs' -> go newTk
+            go tk0 (
+    
+    
 
-takeMVarArray :: MVarArray a -> Int -> IO a
-{-# INLINE takeMVarArray #-}
-takeMVarArray !(MVarArray sizeMn1 arr) !n =
-      takeMVar (P.indexArray arr (n .&. sizeMn1))
 
 -- Not particularly fast; if needs moar fast see
 --   http://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2

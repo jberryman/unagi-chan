@@ -19,6 +19,7 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
 -- TODO 
 --   - Look at how ByteString is implemented; maybe that approach with
 --     ForeignPtr is better in some ways, or perhaps we can use their Internals?
+--       - we can make IndexedMVar () and always write to ByteString
 --       - Also 'vector' lib
 --
 --   - some of these workflows might benefit from prefetch, which would be fun
@@ -41,7 +42,6 @@ import Control.Applicative
 import Data.Bits
 import Data.Typeable(Typeable)
 import GHC.Exts(inline)
-import GHC.Conc(getNumProcessors)
 import Utilities
 
 
@@ -57,10 +57,10 @@ newtype OutChan a = OutChan (ChanEnd a)
     deriving Typeable
 
 instance Eq (InChan a) where
-    (InChan (ChanEnd _ headA _)) == (InChan (ChanEnd _ headB _))
+    (InChan (ChanEnd _ headA)) == (InChan (ChanEnd _ headB))
         = headA == headB
 instance Eq (OutChan a) where
-    (OutChan (ChanEnd _ headA _)) == (OutChan (ChanEnd _ headB _))
+    (OutChan (ChanEnd _ headA)) == (OutChan (ChanEnd _ headB))
         = headA == headB
 
 
@@ -72,8 +72,6 @@ data ChanEnd a =
             -- the stream head; this must never point to a segment whose offset
             -- is greater than the counter value
             !(IORef (StreamHead a))
-            -- a simple blocking queue
-            !(MVarArray a)
     deriving Typeable
 
 data StreamHead a = StreamHead !Int !(Stream a)
@@ -142,15 +140,21 @@ sEGMENT_LENGTH = 1024 -- NOTE: THIS REMAIN A POWER OF 2!
 data Stream a = 
     Stream !SignalIntArray
            !(ElementArray a)
-           -- The next segment in the stream; new segments are allocated and
-           -- put here as we go, with threads cooperating to allocate new
-           -- segments:
+           -- For coordinating blocking between reader/writer; NOTE [1]
+           !(IndexedMVar a)
+           -- The next segment in the stream; NOTE [2] 
            !(IORef (NextSegment a))
+  -- [1] An important property: we can switch out this implementation as long
+  -- as it utilizes a fresh MVar for each reader/writer pair.
+  --
+  -- [2] new segments are allocated and put here as we go, with threads
+  -- cooperating to allocate new segments:
 -- TODO 
 --   - we could replace Stream with a single funky MutableByteArray, even
 --     replacing the IORef with a stored Addr to the next segment, which is
 --     initialized to maxBound (an impossible value hopefully?) indicating
 --     NoSegment
+--      - except for our MVarIndexed in current implementation
 
 data NextSegment a = NoSegment | Next !(Stream a)
 
@@ -158,25 +162,17 @@ data NextSegment a = NoSegment | Next !(Stream a)
 newChanStarting :: (P.Prim a)=> Int -> IO (InChan a, OutChan a)
 {-# INLINE newChanStarting #-}
 newChanStarting !startingCellOffset = do
-    stream <- uncurry Stream <$> segSource <*> newIORef NoSegment
-    -- somewhat arbitrary:
-    vs <- (*2) <$> getNumProcessors
-    mvarArray <- newMVarArray vs -- NOTE: rounds up to nearest power of two
+    stream <- uncurry Stream <$> segSource <*> newIndexedMVar <*> newIORef NoSegment
     let end = ChanEnd
                   <$> newCounter (startingCellOffset - 1)
                   <*> newIORef (StreamHead startingCellOffset stream)
-                  <*> pure mvarArray
-    -- in put/takeMVarArray we're passing segIx, the counter value modulo
-    -- segment size, so we'd like this to hold. But not correctness issue.
-    assert (let !size = nextHighestPowerOfTwo vs 
-             in size <= sEGMENT_LENGTH && sEGMENT_LENGTH `rem` size == 0) $
-        liftA2 (,) (InChan <$> end) (OutChan <$> end)
+    liftA2 (,) (InChan <$> end) (OutChan <$> end)
 
 
 writeChan :: (P.Prim a)=> InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
 writeChan (InChan ce) = \a-> mask_ $ do 
-    (segIx, (Stream sigArr eArr next)) <- moveToNextCell ce
+    (segIx, (Stream sigArr eArr mvarIndexed next)) <- moveToNextCell ce
 
     -- NOTE!: must write element before signaling with CAS:
     writeElementArray eArr segIx a
@@ -193,9 +189,7 @@ writeChan (InChan ce) = \a-> mask_ $ do
       waitingAdvanceStream next 0
     case actuallyWas of
          0 {- Empty -} -> return ()
-         2 {- Blocking -} -> 
-            case ce of
-                 (ChanEnd _ _ b) -> putMVarArray b segIx a
+         2 {- Blocking -} -> putMVarIx mvarIndexed segIx a
          1 {- Written -} -> error "Nearly Impossible! Expected Blocking"
          _ -> error "Invalid signal seen in writeChan!"
   -- [1] the writer which arrives first to the first cell of a new segment is
@@ -209,15 +203,13 @@ writeChan (InChan ce) = \a-> mask_ $ do
 readChanOnExceptionUnmasked :: (P.Prim a)=> (IO a -> IO a) -> OutChan a -> IO a
 {-# INLINE readChanOnExceptionUnmasked #-}
 readChanOnExceptionUnmasked h = \(OutChan ce)-> do
-    (segIx, (Stream sigArr eArr _)) <- moveToNextCell ce
+    (segIx, (Stream sigArr eArr mvarIndexed _)) <- moveToNextCell ce
     -- NOTE!: must CAS on signal before reading element. No barrier necessary.
     actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellBlocking
     case actuallyWas of
          -- succeeded writing Empty; proceed with blocking
-         0 {- Empty -} -> 
-            case ce of
-                 (ChanEnd _ _ b) -> 
-                    inline h $ takeMVarArray b segIx
+         0 {- Empty -} -> inline h $ 
+              readMVarIx mvarIndexed segIx -- N.B. readMVarIx for dupChan
          1 {- Written -} -> readElementArray eArr segIx
          2 {- Blocking -} -> error "Impossible! Only expecting Empty or Written"
          _ -> error "Invalid signal seen in readChanOnExceptionUnmasked!"
@@ -252,7 +244,7 @@ readChanOnException c h = mask_ $
 -- index of our cell.
 moveToNextCell :: (P.Prim a)=> ChanEnd a -> IO (Int, Stream a)
 {-# INLINE moveToNextCell #-}
-moveToNextCell (ChanEnd counter streamHead _) = do
+moveToNextCell (ChanEnd counter streamHead) = do
     (StreamHead offset0 str0) <- readIORef streamHead
     -- NOTE [3]
 #ifdef NOT_x86 
@@ -266,7 +258,7 @@ moveToNextCell (ChanEnd counter streamHead _) = do
               -- (ix - offset0) `quotRem` sEGMENT_LENGTH
         {-# INLINE go #-}
         go 0 str = return str
-        go !n (Stream _ _ next) =
+        go !n (Stream _ _ _ next) =
             waitingAdvanceStream next (nEW_SEGMENT_WAIT*segIx) -- NOTE [1]
               >>= go (n-1)
     str <- go segsAway str0
@@ -307,6 +299,7 @@ waitingAdvanceStream nextSegRef = go where
            | otherwise -> do 
                potentialStrNext <- uncurry Stream 
                                             <$> segSource 
+                                            <*> newIndexedMVar
                                             <*> newIORef NoSegment
                (_,tkDone) <- casIORef nextSegRef tk (Next potentialStrNext)
                -- If that failed another thread succeeded (no false negatives)

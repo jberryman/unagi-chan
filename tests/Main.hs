@@ -12,9 +12,12 @@ import Smoke
 import DupChan
 
 -- implementation-specific tests:
-import Atomics
 import Unagi
 import UnagiUnboxed
+
+-- Other
+import Atomics
+import IndexedMVar
 
 main :: IO ()
 main = do 
@@ -33,6 +36,8 @@ main = do
 
     -- test important properties of our atomic-primops:
     atomicsMain
+
+    indexedMVarMain
 
     -- do things catch fire?
     smokeMain
