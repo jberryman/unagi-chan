@@ -1,4 +1,4 @@
-module Deadlocks where
+module Deadlocks (deadlocksMain) where
 
 import Control.Concurrent.MVar
 import Control.Concurrent(getNumCapabilities,threadDelay,forkIO)

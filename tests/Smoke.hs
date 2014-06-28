@@ -1,5 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
-module Smoke where
+module Smoke (smokeMain) where
 
 import Control.Monad
 import Control.Concurrent(forkIO)

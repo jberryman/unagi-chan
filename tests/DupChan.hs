@@ -1,4 +1,4 @@
-module DupChan where
+module DupChan (dupChanMain) where
 
 -- implementation-agnostic tests of `dupChan`
 
@@ -18,7 +18,7 @@ dupChanMain = do
     putStrLn "OK"
     -- ------
     putStr "    Writer/dupChan+Reader... "
-    replicateM_ 1000 $ dupChanTest1 1000
+    replicateM_ 1000 $ dupChanTest2 10000
     putStrLn "OK"
 
 -- Check output where dupChan at known point in input stream, with two
@@ -62,7 +62,8 @@ dupChanTest2 n = do
 
     throwTo writer ThreadKilled 
 
-    unless (all increm [s1,s2,s3]) $
+    unless (all increm [s1,s2,s3]) $ do
+        print [s1,s2,s3]
         error "All read streams should be incrementing by one, without breaks"
   where increm [] = error "Fix dupChanTest2"
-        increm (x:xs) = xs == take (n-1) [x..]
+        increm xss@(x:_) = xss == take n [x..]

@@ -1,4 +1,4 @@
-module Qsem001 where
+module Qsem001 (defaultMainQSem) where
 
 import Control.Concurrent.QSem as OldQ
 

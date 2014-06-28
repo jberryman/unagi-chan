@@ -1,4 +1,4 @@
-module Atomics where
+module Atomics (atomicsMain) where
 
 import Control.Concurrent
 import Data.Atomics.Counter.Fat
@@ -41,8 +41,10 @@ counterSane = do
 
 cHUNK_SIZE, maxInt, minInt :: Int
 cHUNK_SIZE = 32 -- MUST REMAIN POWER OF TWO for now
+-- make sure incrCounter doesn't silently change to Integer or something
 maxInt = maxBound
 minInt = minBound
+
 -- Test some properties of our counter we'd like to assume:
 testCounterOverflow :: IO ()
 testCounterOverflow = do
@@ -76,14 +78,14 @@ testCounterOverflow = do
                 "\nCounter: "++(show spanningCntr)
 
     -- (We don't use this property)
-    cntr2 <- newCounter maxBound
+    cntr2 <- newCounter maxInt
     mbnd <- incrCounter 1 cntr2
-    unless (mbnd == minBound) $ 
+    unless (mbnd == minInt) $ 
         error $ "Incrementing counter at maxbound didn't yield minBound"
 
     -- (3) test subtraction across boundary: count - newFirstIndex, for window spanning boundary.
-    cntr3 <- newCounter (maxBound - 1)
-    let ls = take 30 $ iterate (+1) $ maxBound - 10
+    cntr3 <- newCounter (maxInt - 1)
+    let ls = take 30 $ iterate (+1) $ maxInt - 10
     cs <- mapM (\x-> fmap (subtract x) $ incrCounter 1 cntr3) ls
     unless (cs == replicate 30 10) $ 
         error $ "Derp. We don't know how subtraction works: "++(show cs)
