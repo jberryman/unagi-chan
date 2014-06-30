@@ -2,29 +2,41 @@ module DupChan (dupChanMain) where
 
 -- implementation-agnostic tests of `dupChan`
 
-import Control.Concurrent.Chan.Unagi
-
 import Control.Concurrent.MVar
 import Control.Concurrent(forkIO,throwTo)
 import Control.Exception(AsyncException(ThreadKilled))
 import Control.Monad
 
+import Implementations
+
+
 dupChanMain :: IO ()
 dupChanMain = do
-    putStrLn "Test dupChan:"
+    putStrLn "==================="
+    putStrLn "Test dupChan Unagi:"
     -- ------
     putStr "    Reader/Reader... "
-    replicateM_ 1000 $ dupChanTest1 50000
+    replicateM_ 1000 $ dupChanTest1 unagiImpl 50000
     putStrLn "OK"
     -- ------
     putStr "    Writer/dupChan+Reader... "
-    replicateM_ 1000 $ dupChanTest2 10000
+    replicateM_ 1000 $ dupChanTest2 unagiImpl 10000
+    putStrLn "OK"
+    putStrLn "==================="
+    putStrLn "Test dupChan Unagi.Unboxed:"
+    -- ------
+    putStr "    Reader/Reader... "
+    replicateM_ 1000 $ dupChanTest1 unboxedUnagiImpl 50000
+    putStrLn "OK"
+    -- ------
+    putStr "    Writer/dupChan+Reader... "
+    replicateM_ 1000 $ dupChanTest2 unboxedUnagiImpl 10000
     putStrLn "OK"
 
 -- Check output where dupChan at known point in input stream, with two
 -- concurrent readers.
-dupChanTest1 :: Int -> IO ()
-dupChanTest1 n = do
+dupChanTest1 :: Implementation inc outc Int -> Int -> IO ()
+dupChanTest1 (newChan,writeChan,readChan,dupChan) n = do
     let s1 = [1.. ndiv2]
         s2 = [(ndiv2+1)..n]
         ndiv2 = n `div` 2
@@ -49,8 +61,8 @@ dupChanTest1 n = do
 
 -- Check concurrent writes with dupChan + reads, check all reads are some
 -- contiguous part of the input stream.
-dupChanTest2 :: Int -> IO ()
-dupChanTest2 n = do
+dupChanTest2 :: Implementation inc outc Int -> Int -> IO ()
+dupChanTest2 (newChan,writeChan,readChan,dupChan) n = do
     (i,o) <- newChan
     out <- newEmptyMVar
     writer <- forkIO $ mapM_ (writeChan i) [(0::Int)..]

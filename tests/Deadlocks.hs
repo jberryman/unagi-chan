@@ -42,7 +42,7 @@ deadlocksMain = do
 
 -- test for deadlocks caused by async exceptions in reader.
 checkDeadlocksReader :: Implementation inc outc Int -> Int -> IO ()
-checkDeadlocksReader (newChan,writeChan,readChan) times = do
+checkDeadlocksReader (newChan,writeChan,readChan,_) times = do
   -- TODO this also will be an argument, indicating whether a killed reader
   -- might result in one missing element.
   let mightDropOne = True
@@ -88,7 +88,7 @@ checkDeadlocksReader (newChan,writeChan,readChan) times = do
 
 -- test for deadlocks from async exceptions raised in writer
 checkDeadlocksWriter :: Implementation inc outc Int -> Int -> IO ()
-checkDeadlocksWriter (newChan,writeChan,readChan) n = void $
+checkDeadlocksWriter (newChan,writeChan,readChan,_) n = void $
   replicateM_ n $ do
          (i,o) <- newChan
          wStart <- newEmptyMVar

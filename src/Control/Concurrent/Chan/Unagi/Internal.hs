@@ -211,7 +211,6 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
 readChan :: OutChan a -> IO a
 {-# INLINE readChan #-}
 readChan = readChanOnExceptionUnmasked id
-          --TODO get id to disappear when inlined
 
 -- | Like 'readChan' but allows recovery of the queue element which would have
 -- been read, in the case that an async exception is raised during the read. To

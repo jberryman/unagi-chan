@@ -8,6 +8,7 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
     , readElementArray, writeElementArray
     , NextSegment(..), StreamHead(..)
     , newChanStarting, writeChan, readChan, readChanOnException
+    , dupChan
     )
     where
 
@@ -103,6 +104,7 @@ type SignalIntArray = P.MutableByteArray RealWorld
 --   During Read:
 --     Empty   -> Blocking
 --     Written
+--     Blocking (only when dupChan used)
 --   During Write:
 --     Empty   -> Written 
 --     Blocking
@@ -169,6 +171,21 @@ newChanStarting !startingCellOffset = do
     liftA2 (,) (InChan <$> end) (OutChan <$> end)
 
 
+-- | Duplicate a chan: the returned @OutChan@ begins empty, but data written to
+-- the argument @InChan@ from then on will be available from both the original
+-- @OutChan@ and the one returned here, creating a kind of broadcast channel.
+dupChan :: InChan a -> IO (OutChan a)
+{-# INLINE dupChan #-}
+dupChan (InChan (ChanEnd counter streamHead)) = do
+    hLoc <- readIORef streamHead
+    loadLoadBarrier  -- NOTE [1]
+    wCount <- readCounter counter
+    OutChan <$> (ChanEnd <$> newCounter wCount <*> newIORef hLoc)
+  -- [1] We must read the streamHead before inspecting the counter; otherwise,
+  -- as writers write, the stream head pointer may advance past the cell
+  -- indicated by wCount.
+
+
 writeChan :: (P.Prim a)=> InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
 writeChan (InChan ce) = \a-> mask_ $ do 
@@ -179,7 +196,7 @@ writeChan (InChan ce) = \a-> mask_ $ do
 #ifdef NOT_x86 
     -- TODO Should we include this for correctness sake? Will GHC ever move a write ahead of a CAS?
     -- CAS provides a full barrier on x86; otherwise we need to make sure the
-    -- read above occurrs before our fetch-and-add:
+    -- read above occurs before our fetch-and-add:
     writeBarrier
 #endif
     actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellWritten
@@ -206,13 +223,20 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
     (segIx, (Stream sigArr eArr mvarIndexed _)) <- moveToNextCell ce
     -- NOTE!: must CAS on signal before reading element. No barrier necessary.
     actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellBlocking
+
+    let {-# INLINE readBlocking #-}
+        readBlocking = inline h $ readMVarIx mvarIndexed segIx -- NOTE [1]
     case actuallyWas of
          -- succeeded writing Empty; proceed with blocking
-         0 {- Empty -} -> inline h $ 
-              readMVarIx mvarIndexed segIx -- N.B. readMVarIx for dupChan
+         0 {- Empty -} -> readBlocking
+         -- else in the meantime, writer wrote
          1 {- Written -} -> readElementArray eArr segIx
-         2 {- Blocking -} -> error "Impossible! Only expecting Empty or Written"
+         -- else in the meantime a dupChan reader read, blocking
+         2 {- Blocking -} -> readBlocking
          _ -> error "Invalid signal seen in readChanOnExceptionUnmasked!"
+  -- [1] we must use `readMVarIx` here to support `dupChan`. It's also
+  -- important that the behavior of readMVarIx be identical to a readMVar on
+  -- the same MVar.
 
 
 -- | Read an element from the chan, blocking if the chan is empty.
