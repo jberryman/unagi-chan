@@ -1,5 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
-module Smoke where
+module Smoke (smokeMain) where
 
 import Control.Monad
 import Control.Concurrent(forkIO)
@@ -30,7 +30,7 @@ smokeMain = do
 
 
 fifoSmoke :: Implementation inc outc Int -> Int -> IO ()
-fifoSmoke (newChan,writeChan,readChan) n = do
+fifoSmoke (newChan,writeChan,readChan,_) n = do
     (i,o) <- newChan
     mapM_ (writeChan i) [1..n]
     nsOut <- replicateM n $ readChan o
@@ -38,7 +38,7 @@ fifoSmoke (newChan,writeChan,readChan) n = do
         error "Cough!"
 
 testContention :: Implementation inc outc Int -> Int -> Int -> Int -> IO ()
-testContention (newChan,writeChan,readChan) writers readers n = do
+testContention (newChan,writeChan,readChan,_) writers readers n = do
   let nNice = n - rem n (lcm writers readers)
              -- e.g. [[1,2,3,4,5],[6,7,8,9,10]] for 2 2 10
       groups = map (\i-> [i.. i - 1 + nNice `quot` writers]) $ [1, (nNice `quot` writers + 1).. nNice]

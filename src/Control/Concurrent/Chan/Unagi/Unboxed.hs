@@ -10,6 +10,8 @@ module Control.Concurrent.Chan.Unagi.Unboxed (
     -- ** Writing
     , writeChan
     , writeList2Chan
+    -- ** Broadcasting
+    , dupChan
     ) where
 
 -- Forked from src/Control/Concurrent/Chan/Unagi/Internal.hs at 443465

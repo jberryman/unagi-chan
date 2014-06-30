@@ -1,50 +1,70 @@
 {-# LANGUAGE BangPatterns  #-}
 module Utilities (
     -- * Utility Chans
-    -- ** MVar Arrays
-      MVarArray()
-    , newMVarArray , putMVarArray , takeMVarArray
+    -- ** Indexed MVars
+      IndexedMVar()
+    , newIndexedMVar, putMVarIx, readMVarIx
     -- ** Other stuff
     , nextHighestPowerOfTwo
     ) where
 
 import Control.Concurrent.MVar
 import Control.Exception
-import qualified Data.Primitive as P
-import Control.Monad
 import Control.Applicative
 import Data.Bits
 import Data.Word
+import Data.Atomics
+import Data.IORef
+
+-- For now: a reverse-ordered assoc list; an IntMap might be better
+newtype IndexedMVar a = IndexedMVar (IORef [(Int, MVar a)])
+
+newIndexedMVar :: IO (IndexedMVar a)
+newIndexedMVar = IndexedMVar <$> newIORef []
 
 
 
--- We use this as part of some other implementations as well as Tako.Bounded
--- TODO more efficient unboxed implementation possible with CMM?
-data MVarArray a = MVarArray !Int !(P.Array (MVar a))
---                              \ array size - 1, for bitwise mod
+-- these really suck; sorry.
 
--- A new array of MVars of the given size, rounded up to the next power of two
--- TODO maybe a lazy IO newMVar version for large bounded channels
-newMVarArray :: Int -> IO (MVarArray a)
-newMVarArray !sizeDirty = do
-    let !size = nextHighestPowerOfTwo sizeDirty
-        !sizeMn1 = size - 1
-    mArr <- P.newArray size undefined
-    forM_ [0..sizeMn1] $ \i->
-        newEmptyMVar >>= P.writeArray mArr i
+readMVarIx :: IndexedMVar a -> Int -> IO a
+{-# INLINE readMVarIx #-}
+readMVarIx mvIx i = do
+    readMVar =<< getMVarIx mvIx i
 
-    MVarArray sizeMn1 <$> P.unsafeFreezeArray mArr
+putMVarIx :: IndexedMVar a -> Int -> a -> IO ()
+{-# INLINE putMVarIx #-}
+putMVarIx mvIx i a = do
+    flip putMVar a =<< getMVarIx mvIx i
 
--- Put to the index specified, wrapping if larger than array; negative `n` OK.
-putMVarArray :: MVarArray a -> Int -> a -> IO ()
-{-# INLINE putMVarArray #-}
-putMVarArray !(MVarArray sizeMn1 arr) !n = 
-      putMVar (P.indexArray arr (n .&. sizeMn1))
+getMVarIx :: IndexedMVar a -> Int -> IO (MVar a)
+{-# INLINE getMVarIx #-}
+getMVarIx (IndexedMVar v) i = do
+    -- We're right to optimistically create this for readMVarIx, but throw this
+    -- away for most putMVarIx (from writers), probably.
+    mv <- newEmptyMVar
+    tk0 <- readForCAS v
+    let go tk = do
+            let !xs = peekTicket tk
+            case findInsert i mv xs of
+                 Left alreadyPresentMVar -> return alreadyPresentMVar
+                 Right xs' -> do 
+                    (success,newTk) <- casIORef v tk xs'
+                    if success 
+                        then return mv
+                        else go newTk
+    go tk0
 
-takeMVarArray :: MVarArray a -> Int -> IO a
-{-# INLINE takeMVarArray #-}
-takeMVarArray !(MVarArray sizeMn1 arr) !n =
-      takeMVar (P.indexArray arr (n .&. sizeMn1))
+-- Reverse-sorted:
+findInsert :: Int -> mvar -> [(Int,mvar)] -> Either mvar [(Int,mvar)]
+{-# INLINE findInsert #-}
+findInsert i mv = ins where
+    ins [] = Right [(i,mv)] 
+    ins xss@((i',x):xs) = 
+               case compare i i' of
+                    GT -> Right $ (i,mv):xss
+                    EQ -> Left x
+                    LT -> fmap ((i',x):) $ ins xs
+
 
 -- Not particularly fast; if needs moar fast see
 --   http://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
