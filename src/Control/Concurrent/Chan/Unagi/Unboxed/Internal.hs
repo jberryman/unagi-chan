@@ -183,14 +183,13 @@ dupChan (InChan (ChanEnd counter streamHead)) = do
     OutChan <$> (ChanEnd <$> newCounter wCount <*> newIORef hLoc)
   -- [1] We must read the streamHead before inspecting the counter; otherwise,
   -- as writers write, the stream head pointer may advance past the cell
-  -- indicated by wCount.
+  -- indicated by wCount and the first cell become unreachable.
 
 
 writeChan :: (P.Prim a)=> InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
 writeChan (InChan ce) = \a-> mask_ $ do 
     (segIx, (Stream sigArr eArr mvarIndexed next)) <- moveToNextCell ce
-
     -- NOTE!: must write element before signaling with CAS:
     writeElementArray eArr segIx a
 #ifdef NOT_x86 
@@ -200,7 +199,6 @@ writeChan (InChan ce) = \a-> mask_ $ do
     writeBarrier
 #endif
     actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellWritten
-
     -- try to pre-allocate next segment; NOTE [1]
     when (segIx == 0) $ void $
       waitingAdvanceStream next 0
@@ -221,19 +219,23 @@ readChanOnExceptionUnmasked :: (P.Prim a)=> (IO a -> IO a) -> OutChan a -> IO a
 {-# INLINE readChanOnExceptionUnmasked #-}
 readChanOnExceptionUnmasked h = \(OutChan ce)-> do
     (segIx, (Stream sigArr eArr mvarIndexed _)) <- moveToNextCell ce
-    -- NOTE!: must CAS on signal before reading element. No barrier necessary.
-    actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellBlocking
-
-    let {-# INLINE readBlocking #-}
-        readBlocking = inline h $ readMVarIx mvarIndexed segIx -- NOTE [1]
-    case actuallyWas of
-         -- succeeded writing Empty; proceed with blocking
-         0 {- Empty -} -> readBlocking
-         -- else in the meantime, writer wrote
+    -- NOTE!: must read signal before reading element. No barrier necessary.
+    let readBlocking = inline h $ readMVarIx mvarIndexed segIx -- NOTE [1]
+    -- optimistically try read w/out CAS
+    sig <- P.readByteArray sigArr segIx
+    case (sig :: Int) of
          1 {- Written -} -> readElementArray eArr segIx
-         -- else in the meantime a dupChan reader read, blocking
          2 {- Blocking -} -> readBlocking
-         _ -> error "Invalid signal seen in readChanOnExceptionUnmasked!"
+         _ -> do
+            actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellBlocking
+            case actuallyWas of
+                 -- succeeded writing Empty; proceed with blocking
+                 0 {- Empty -} -> readBlocking
+                 -- else in the meantime, writer wrote
+                 1 {- Written -} -> readElementArray eArr segIx
+                 -- else in the meantime a dupChan reader read, blocking
+                 2 {- Blocking -} -> readBlocking
+                 _ -> error "Invalid signal seen in readChanOnExceptionUnmasked!"
   -- [1] we must use `readMVarIx` here to support `dupChan`. It's also
   -- important that the behavior of readMVarIx be identical to a readMVar on
   -- the same MVar.
@@ -248,7 +250,6 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
 readChan :: (P.Prim a)=> OutChan a -> IO a
 {-# INLINE readChan #-}
 readChan = readChanOnExceptionUnmasked id
-          --TODO get id to disappear when inlined
 
 -- | Like 'readChan' but allows recovery of the queue element which would have
 -- been read, in the case that an async exception is raised during the read. To
