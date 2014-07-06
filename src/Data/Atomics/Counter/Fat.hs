@@ -15,21 +15,16 @@ import Data.Atomics(fetchAddByteArrayInt)
 
 newtype AtomicCounter = AtomicCounter (MutableByteArray RealWorld)
 
-sIZEOF_TWO_CACHELINES , cACHELINE_PADDED_INT_IX  :: Int
-{-
- -- I'm losing it... this should actually be a full cacheline buffer, but in my
- -- test where this module gives a benefit, the numbers below (doubled) perform
- -- even better. WTF.
-sIZEOF_TWO_CACHELINES   = 128
-cACHELINE_PADDED_INT_IX = (sIZEOF_TWO_CACHELINES `quot` 2) `quot` sIZEOF_INT
--}
-sIZEOF_TWO_CACHELINES   = 256 
-cACHELINE_PADDED_INT_IX = 128 `quot` sIZEOF_INT
+sIZEOF_CACHELINE , cACHELINE_PADDED_INT_IX  :: Int
+sIZEOF_CACHELINE   = 64
+cACHELINE_PADDED_INT_IX = (sIZEOF_CACHELINE `quot` 2) `quot` sIZEOF_INT
 
 newCounter :: Int -> IO AtomicCounter
 {-# INLINE newCounter #-}
 newCounter n = do
-    arr <- newByteArray sIZEOF_TWO_CACHELINES
+    arr <- newAlignedPinnedByteArray 
+                sIZEOF_CACHELINE
+                sIZEOF_CACHELINE
     writeByteArray arr cACHELINE_PADDED_INT_IX n
     return (AtomicCounter arr)
 
