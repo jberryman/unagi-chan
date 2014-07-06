@@ -120,16 +120,16 @@ cellWritten = 1
 cellBlocking = 2
 
 
-
--- TODO TEST
 segSource :: forall a. (P.Prim a)=> IO (SignalIntArray, ElementArray a) --ScopedTypeVariables
 {-# INLINE segSource #-}
 segSource = do
     -- A largish pinned array seems like it would be the best choice here.
-    sigArr <- P.newPinnedByteArray 
-                (P.sizeOf cellEmpty `unsafeShiftL` pOW) -- * sEGMENT_LENGTH
-    eArr <- P.newPinnedByteArray 
-                (P.sizeOf (undefined :: a) `unsafeShiftL` pOW)
+    sigArr <- P.newAlignedPinnedByteArray 
+                (P.sizeOf    cellEmpty `unsafeShiftL` pOW) -- * sEGMENT_LENGTH
+                (P.alignment cellEmpty)
+    eArr <- P.newAlignedPinnedByteArray 
+                (P.sizeOf    (undefined :: a) `unsafeShiftL` pOW)
+                (P.alignment (undefined :: a))
     P.setByteArray sigArr 0 sEGMENT_LENGTH cellEmpty
     return (sigArr, ElementArray eArr)
 
