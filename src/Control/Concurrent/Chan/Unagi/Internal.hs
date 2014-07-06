@@ -44,6 +44,7 @@ import GHC.Exts(inline)
 nEW_SEGMENT_WAIT :: Int
 nEW_SEGMENT_WAIT = round (((14.6::Float) + 0.3*fromIntegral sEGMENT_LENGTH) / 3.7) + 10
 
+-- TODO WHAT ABOUT WHEN THIS TICKET GOES STALE???
 data InChan a = InChan !(Ticket (Cell a)) !(ChanEnd a)
     deriving Typeable
 newtype OutChan a = OutChan (ChanEnd a)
@@ -101,7 +102,7 @@ data Cell a = Empty | Written a | Blocking !(MVar a)
 --
 sEGMENT_LENGTH :: Int
 {-# INLINE sEGMENT_LENGTH #-}
-sEGMENT_LENGTH = 1024 -- NOTE: THIS REMAIN A POWER OF 2!
+sEGMENT_LENGTH = 1024 -- NOTE: THIS MUST REMAIN A POWER OF 2!
 
 -- NOTE In general we'll have two segments allocated at any given time in
 -- addition to the segment template, so in the worst case, when the program
@@ -159,13 +160,20 @@ writeChan (InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) = \a-> mask_ $ do
     when (not success) $
         case peekTicket nonEmptyTkt of
              Blocking v -> putMVar v a
-             _ -> error "Nearly Impossible! Expected Blocking"
+             Empty      -> error "Stored Empty Ticket went stale!" -- NOTE [2]
+             Written _  -> error "Nearly Impossible! Expected Blocking"
   -- [1] the writer which arrives first to the first cell of a new segment is
   -- tasked (somewhat arbitrarily) with trying to pre-allocate the *next*
   -- segment hopefully ahead of any readers or writers who might need it. This
   -- will race with any reader *or* writer that tries to read the next segment
   -- and finds it's empty (see `waitingAdvanceStream`); when this wins
   -- (hopefully the vast majority of the time) we avoid a throughput hit.
+  --
+  -- [2] this assumes that the compiler is statically-allocating Empty, sharing
+  -- the constructor among all uses, and that it never moves it between
+  -- checking the pointer stored in the array and checking the pointer in the
+  -- cached Any Empty value. If this is incorrect then the Ticket approach to
+  -- CAS is equally incorrect (though maybe less likely to fail).
 
 
 -- We would like our queue to behave like Chan in that an async exception
@@ -250,7 +258,7 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
     str <- go segsAway str0
     when (segsAway > 0) $ do
         let !offsetN = 
-              offset0 + (segsAway `unsafeShiftL` pOW) --(segsAway*sEGMENT_LENGTH)
+              offset0 + (segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH) --(segsAway*sEGMENT_LENGTH)
         writeIORef streamHead $ StreamHead offsetN str -- NOTE [2]
     return (segIx,str)
   -- [1] All readers or writers needing to work with a not-yet-created segment
@@ -320,13 +328,13 @@ newSegmentSource = do
 
 
 
-pOW, sEGMENT_LENGTH_MN_1 :: Int
-pOW = round $ logBase (2::Float) $ fromIntegral sEGMENT_LENGTH -- or bit shifts in loop
+lOG_SEGMENT_LENGTH, sEGMENT_LENGTH_MN_1 :: Int
+lOG_SEGMENT_LENGTH = round $ logBase (2::Float) $ fromIntegral sEGMENT_LENGTH -- or bit shifts in loop
 sEGMENT_LENGTH_MN_1 = sEGMENT_LENGTH - 1
 
 divMod_sEGMENT_LENGTH :: Int -> (Int,Int)
 {-# INLINE divMod_sEGMENT_LENGTH #-}
-divMod_sEGMENT_LENGTH n = let d = n `unsafeShiftR` pOW
+divMod_sEGMENT_LENGTH n = let d = n `unsafeShiftR` lOG_SEGMENT_LENGTH
                               m = n .&. sEGMENT_LENGTH_MN_1
                            in d `seq` m `seq` (d,m)
 

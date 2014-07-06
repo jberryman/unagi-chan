@@ -115,8 +115,8 @@ data Cell a = Empty    -- 0
 -}
 type Cell = Int
 cellEmpty, cellWritten, cellBlocking :: Cell
-cellEmpty = 0
-cellWritten = 1
+cellEmpty    = 0
+cellWritten  = 1
 cellBlocking = 2
 
 
@@ -125,10 +125,10 @@ segSource :: forall a. (P.Prim a)=> IO (SignalIntArray, ElementArray a) --Scoped
 segSource = do
     -- A largish pinned array seems like it would be the best choice here.
     sigArr <- P.newAlignedPinnedByteArray 
-                (P.sizeOf    cellEmpty `unsafeShiftL` pOW) -- * sEGMENT_LENGTH
+                (P.sizeOf    cellEmpty `unsafeShiftL` lOG_SEGMENT_LENGTH) -- * sEGMENT_LENGTH
                 (P.alignment cellEmpty)
     eArr <- P.newAlignedPinnedByteArray 
-                (P.sizeOf    (undefined :: a) `unsafeShiftL` pOW)
+                (P.sizeOf    (undefined :: a) `unsafeShiftL` lOG_SEGMENT_LENGTH)
                 (P.alignment (undefined :: a))
     P.setByteArray sigArr 0 sEGMENT_LENGTH cellEmpty
     return (sigArr, ElementArray eArr)
@@ -136,7 +136,7 @@ segSource = do
 
 sEGMENT_LENGTH :: Int
 {-# INLINE sEGMENT_LENGTH #-}
-sEGMENT_LENGTH = 1024 -- NOTE: THIS REMAIN A POWER OF 2!
+sEGMENT_LENGTH = 1024 -- NOTE: THIS MUST REMAIN A POWER OF 2!
 
 
 data Stream a = 
@@ -289,7 +289,7 @@ moveToNextCell (ChanEnd counter streamHead) = do
     str <- go segsAway str0
     when (segsAway > 0) $ do
         let !offsetN = 
-              offset0 + (segsAway `unsafeShiftL` pOW) --(segsAway*sEGMENT_LENGTH)
+              offset0 + (segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH) --(segsAway*sEGMENT_LENGTH)
         writeIORef streamHead $ StreamHead offsetN str -- NOTE [2]
     return (segIx,str)
   -- [1] All readers or writers needing to work with a not-yet-created segment
@@ -334,12 +334,12 @@ waitingAdvanceStream nextSegRef = go where
          Next strNext -> return strNext
 
 
-pOW, sEGMENT_LENGTH_MN_1 :: Int
-pOW = round $ logBase (2::Float) $ fromIntegral sEGMENT_LENGTH -- or bit shifts in loop
+lOG_SEGMENT_LENGTH, sEGMENT_LENGTH_MN_1 :: Int
+lOG_SEGMENT_LENGTH = round $ logBase (2::Float) $ fromIntegral sEGMENT_LENGTH -- or bit shifts in loop
 sEGMENT_LENGTH_MN_1 = sEGMENT_LENGTH - 1
 
 divMod_sEGMENT_LENGTH :: Int -> (Int,Int)
 {-# INLINE divMod_sEGMENT_LENGTH #-}
-divMod_sEGMENT_LENGTH n = let d = n `unsafeShiftR` pOW
+divMod_sEGMENT_LENGTH n = let d = n `unsafeShiftR` lOG_SEGMENT_LENGTH
                               m = n .&. sEGMENT_LENGTH_MN_1
                            in d `seq` m `seq` (d,m)
