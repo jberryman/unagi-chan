@@ -26,16 +26,6 @@ import Data.Bits
 import Data.Typeable(Typeable)
 import GHC.Exts(inline)
 
--- TODO WRT GARBAGE COLLECTION
---  This can lead to large amounts of memory use in theory:
---   1. overhead of pre-allocated arrays and template and fat counter
---   2. already-read elements in arrays not-yet GC'd
---   3. array and element overhead from a writer/reader delayed (many intermediate chunks)
---
--- Ideas:
---   - hold weak reference to previous segment, and when we move the head
---     pointer, update `next` to point to this new segment (if it is still
---     around?)
 
 
 -- Number of reads on which to spin for new segment creation.
@@ -44,7 +34,6 @@ import GHC.Exts(inline)
 nEW_SEGMENT_WAIT :: Int
 nEW_SEGMENT_WAIT = round (((14.6::Float) + 0.3*fromIntegral sEGMENT_LENGTH) / 3.7) + 10
 
--- TODO WHAT ABOUT WHEN THIS TICKET GOES STALE???
 data InChan a = InChan !(Ticket (Cell a)) !(ChanEnd a)
     deriving Typeable
 newtype OutChan a = OutChan (ChanEnd a)
@@ -58,7 +47,7 @@ instance Eq (OutChan a) where
         = headA == headB
 
 -- TODO POTENTIAL CPP FLAGS (or functions)
---   - Strict element (or lazy? maybe also reveal a writeChan' when relevant?)
+--   - Strict element (or lazy? maybe also expose a writeChan' when relevant?)
 --   - sEGMENT_LENGTH
 --   - reads that clear the element immediately (or export as a special function?)
 

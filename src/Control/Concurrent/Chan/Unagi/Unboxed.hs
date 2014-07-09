@@ -17,7 +17,6 @@ module Control.Concurrent.Chan.Unagi.Unboxed (
 -- Forked from src/Control/Concurrent/Chan/Unagi/Internal.hs at 443465
 --
 -- TODO additonal functions:
---   - dupChan. Blanking on reasonable ways to do this here.
 --   - write functions optimized for single-writer
 --   - faster write/read-many that increments counter by N
 --   - this could be used (or forked) to implement an efficient MPSC concurrent

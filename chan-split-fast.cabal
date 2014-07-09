@@ -37,20 +37,23 @@ library
     cpp-options: -DNOT_x86
 
 
--- Implementations roadmap:
---   - fixed size MutableArray of purely-functional dequeues (maybe "Tako"?) (fecth-and-add, then CAS)
+-- Potential implementations roadmap (or we might just stick with this design
+-- for this package):
+--
+--   - fixed size MutableArray of purely-functional dequeues ("Tako") (fetch-and-add, then CAS)
 --       - variant replacing CAS with blocking turn-taking, also play with leap-frogging cache-lines
 --       - variant in STM (how to safely do the initial incrCounter at most once though?)
 --         would also let us separate read and write buckets.
---   - bounded Tako variant: Array MVar
---   - implement "Fast Concurrent Queues for x86 Processors" by Morrison & Afek (non-blocking, probably more clever)
+--   - bounded Tako variant
+--   - maybe implement "Fast Concurrent Queues for x86 Processors" by Morrison & Afek (non-blocking, probably more clever)
 --   - Also looks like a similar (but lockfree, as above) counter-based queue has been developed by FB:
 --       https://github.com/facebook/folly/blob/master/folly/MPMCQueue.h
---   - unboxed Unagi w/ two MutableByteArrays (fetch-and-add, write A2, barrier, CAS A1; f&a, CAS A2, barrier, read A1)
---     also play with spreading writes across array for cache, and maybe prefetching w/ read.
 --   - boxed Unagi variant avoiding CAS with read simply spinning a few times and then calling yield, or something else
 
--- TODO  possibly have a different Main.hs for each Chan type, but then use different test-suites which set a var to decide which to import.
+
+-- Please just build tests and run:
+--     $ time ./dist/build/test/test
+-- Doing `cabal test` takes forever for some reason.
 test-suite test
   type: exitcode-stdio-1.0
   ghc-options: -Wall -funbox-strict-fields

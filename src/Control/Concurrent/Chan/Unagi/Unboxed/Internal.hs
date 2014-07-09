@@ -22,14 +22,6 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
 --     ForeignPtr is better in some ways, or perhaps we can use their Internals?
 --       - we can make IndexedMVar () and always write to ByteString
 --       - Also 'vector' lib
---
---   - some of these workflows might benefit from prefetch, which would be fun
---       - getChanContents
---       - after a read to the last of a cache-line, prefetch next (this might
---         help streaming workflows up to certain number of threads, and
---         hopefully not harm performance much otherwise)
---       - future single-writer scenarios
---          - any benefit for multiple writers?
 
 
 import Data.IORef
