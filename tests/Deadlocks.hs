@@ -43,8 +43,8 @@ deadlocksMain = do
 -- test for deadlocks caused by async exceptions in reader.
 checkDeadlocksReader :: Implementation inc outc Int -> Int -> IO ()
 checkDeadlocksReader (newChan,writeChan,readChan,_) times = do
-  -- TODO this also will be an argument, indicating whether a killed reader
-  -- might result in one missing element.
+  -- this might become an argument, indicating whether a killed reader might
+  -- result in one missing element (currently all do)
   let mightDropOne = True
   procs <- getNumCapabilities
   let run _       0 = putStrLn ""

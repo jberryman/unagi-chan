@@ -89,8 +89,6 @@ testCounterOverflow = do
     cs <- mapM (\x-> fmap (subtract x) $ incrCounter 1 cntr3) ls
     unless (cs == replicate 30 10) $ 
         error $ "Derp. We don't know how subtraction works: "++(show cs)
-    -- (4) readIORef before fetchAndAdd w/ barriers
-    -- TODO?
 
 -- Test these assumptions:
 --   1) If a CAS fails in thread 1 then another CAS (in thread 2, say) succeeded; i.e. no false negatives

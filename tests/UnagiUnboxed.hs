@@ -7,7 +7,7 @@ module UnagiUnboxed (unagiUnboxedMain) where
 import Control.Concurrent.Chan.Unagi.Unboxed
 import qualified Control.Concurrent.Chan.Unagi.Unboxed.Internal as UI
 import Control.Monad
---import qualified Data.Primitive as P
+import qualified Data.Primitive as P
 import Data.IORef
 
 import Control.Concurrent(forkIO,threadDelay)
@@ -75,7 +75,9 @@ correctFirstWrite n = do
     case cell of
          7 -> return ()
          _ -> error "Expected a write at index 0 of 7"
-    -- TODO check sigArr
+    sigCell <- P.readByteArray sigArr 0 :: IO Int
+    unless (sigCell == 1) $ -- i.e. cellWritten
+         error "Expected cellWritten at sigArr!0"
 
 -- check writes by doing a segment+1-worth of reads by hand
 -- also check that segments pre-allocated as expected
@@ -87,18 +89,18 @@ correctInitialWrites startN = do
     (UI.StreamHead _ (UI.Stream sigArr eArr _ next)) <- readIORef arrRef
     -- check all of first segment:
     forM_ (init writes) $ \ix-> do
-        cell <- UI.readElementArray eArr ix :: IO Int-- TODO something with sigArr
-        case cell of
-             n  | n == ix -> return ()
-                | otherwise -> error $ "Expected a write at index "++(show ix)++" of same value but got "++(show n)
+        cell <- UI.readElementArray eArr ix :: IO Int
+        sigCell <- P.readByteArray sigArr ix :: IO Int
+        unless (cell == ix && sigCell == 1) $
+            error $ "Expected a write at index "++(show ix)++" of same value but got "++(show cell)++" with signal "++(show sigCell)
     -- check last write:
     lastSeg  <- readIORef next
     case lastSeg of
          (UI.Next (UI.Stream sigArr2 eArr2 _ next2)) -> do
             cell <- UI.readElementArray eArr2 0 :: IO Int
-            case cell of
-                 n  | n == last writes -> return ()
-                    | otherwise -> error $ "Expected last write at index "++(show $ last writes)++" of same value but got "++(show n)
+            sigCell <- P.readByteArray sigArr2 0 :: IO Int
+            unless (cell == last writes && sigCell == 1) $
+                error $ "Expected last write at index "++(show $ last writes)++" of same value but got "++(show cell)
             -- check pre-allocation:
             n2 <- readIORef next2
             case n2 of 

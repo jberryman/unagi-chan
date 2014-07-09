@@ -5,9 +5,8 @@ import qualified Control.Concurrent.Chan.Unagi as U
 import Control.Exception
 import Control.Monad
 
--- TODO we'll have this bind to arguments: newChan readChan writeChan n
---      and pass qualified names as we add tests. Do the same in other generic
---      tests
+-- OBSOLETE FOR NOW; we have more clever and careful deadlock tests in
+-- Deadlocks
 
 -- test for deadlocks from async exceptions raised in writer
 checkDeadlocksWriter :: Int -> IO ()

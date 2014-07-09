@@ -6,7 +6,6 @@ import Control.Concurrent
 import Control.Exception
 
 -- implementation-agnostic tests:
-import Qsem001
 import Deadlocks
 import Smoke
 import DupChan
@@ -44,9 +43,6 @@ main = do
 
     -- dupChan tests
     dupChanMain
-
-    -- QSem tests:
-    defaultMainQSem
 
     -- check for deadlocks:
     deadlocksMain
