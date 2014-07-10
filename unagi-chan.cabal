@@ -3,20 +3,45 @@ version:             0.1.0.0
 
 synopsis:            Fast and scalable concurrent queues for x86, with a Chan-like API
 
-description:         TODO
-
+description:
+    This library provides implementations of concurrent FIFO queues (for both
+    general boxed and primitive unboxed values) that are fast, perform well
+    under contention, and offer a Chan-like interface. The library may be of
+    limited usefulness outside of x86 architectures where the fetch-and-add
+    instruction is not available.
+    .
+    Here is an example benchmark measuring the time taken to write and then
+    read 100,000 messages, with work divided amongst increasing number of
+    readers and writers (time in ms), comparing against the top-performing
+    queues in the standard libraries.
+    .
+    <<http://i.imgur.com/safKkCP.png>>
+    .
+    And here is a view on just the unagi implementations.
+    .
+    <<http://i.imgur.com/K6s2pXj.png>>
+    .
+    
 license:             BSD3
 license-file:        LICENSE
 author:              Brandon Simmons
 maintainer:          brandon.m.simmons@gmail.com
 category:            Concurrency
 build-type:          Simple
--- extra-source-files:  
 cabal-version:       >=1.10
+-- currently uploaded to imgur; move to this eventually
+--extra-doc-files:     images/*.png
+--cabal-version:       >=1.18
+
 
 flag dev
   default: False
   manual: True
+
+source-repository head   
+    type:     git
+    location: https://github.com/jberryman/unagi-chan.git
+    branch:   master
 
 library
   hs-source-dirs:      src
@@ -29,7 +54,7 @@ library
                      , Data.Atomics.Counter.Fat
 
   ghc-options:        -Wall -funbox-strict-fields
-  build-depends:       base
+  build-depends:       base < 5
                      , atomic-primops==0.6.0.5
                      , primitive>=0.5.3
   default-language:    Haskell2010
@@ -37,7 +62,7 @@ library
   -- We'll need some additional barriers for correctness:
   if !arch(i386) && !arch(x86_64)
     cpp-options: -DNOT_x86
-
+  
 
 -- Potential implementations roadmap (or we might just stick with this design
 -- for this package):

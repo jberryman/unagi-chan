@@ -117,7 +117,7 @@ segSource :: forall a. (P.Prim a)=> IO (SignalIntArray, ElementArray a) --Scoped
 segSource = do
     -- A largish pinned array seems like it would be the best choice here.
     sigArr <- P.newAlignedPinnedByteArray 
-                (P.sizeOf    cellEmpty `unsafeShiftL` lOG_SEGMENT_LENGTH) -- * sEGMENT_LENGTH
+                (P.sizeOf    cellEmpty `unsafeShiftL` lOG_SEGMENT_LENGTH) -- times sEGMENT_LENGTH
                 (P.alignment cellEmpty)
     eArr <- P.newAlignedPinnedByteArray 
                 (P.sizeOf    (undefined :: a) `unsafeShiftL` lOG_SEGMENT_LENGTH)
@@ -177,7 +177,7 @@ dupChan (InChan (ChanEnd counter streamHead)) = do
   -- as writers write, the stream head pointer may advance past the cell
   -- indicated by wCount and the first cell become unreachable.
 
-
+-- | Write a value to the channel.
 writeChan :: (P.Prim a)=> InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
 writeChan (InChan ce) = \a-> mask_ $ do 
@@ -246,7 +246,7 @@ readChan = readChanOnExceptionUnmasked id
 -- | Like 'readChan' but allows recovery of the queue element which would have
 -- been read, in the case that an async exception is raised during the read. To
 -- be precise exceptions are raised, and the handler run, only when
--- @readChanOnException@ is blocking on an empty queue.
+-- @readChanOnException@ is blocking.
 --
 -- The second argument is a handler that takes a blocking IO action returning
 -- the element, and performs some recovery action.  When the handler is called,
@@ -291,7 +291,7 @@ moveToNextCell (ChanEnd counter streamHead) = do
   --
   -- [2] advancing the stream head pointer on segIx == sEGMENT_LENGTH - 1 would
   -- be more correct, but this is simpler here. This may move the head pointer
-  -- *backwards* if the thread was descheduled, but that's not a correctness
+  -- BACKWARDS if the thread was descheduled, but that's not a correctness
   -- issue.
   --
   -- [3] There is a theoretical race condition here: thread reads head and is

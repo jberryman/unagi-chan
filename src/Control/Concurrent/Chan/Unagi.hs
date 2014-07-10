@@ -1,4 +1,8 @@
 module Control.Concurrent.Chan.Unagi (
+{- | General-purpose concurrent FIFO queue. If you are trying to send messages
+   of a primitive unboxed type, you may wish to use "Control.Concurrent.Chan.Unagi.Unboxed"
+   which should be slightly faster and perform better when a queue frows very large.
+ -}
     -- * Creating channels
       newChan
     , InChan(), OutChan()
@@ -22,6 +26,7 @@ import Control.Concurrent.Chan.Unagi.Internal
 import System.IO.Unsafe ( unsafeInterleaveIO ) 
 
 
+-- | Create a new channel, returning its write and read ends.
 newChan :: IO (InChan a, OutChan a)
 newChan = newChanStarting (maxBound - 10) 
     -- lets us test counter overflow in tests and normal course of operation

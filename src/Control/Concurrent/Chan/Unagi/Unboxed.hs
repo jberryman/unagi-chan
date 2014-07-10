@@ -31,6 +31,7 @@ import System.IO.Unsafe ( unsafeInterleaveIO )
 import Data.Primitive(Prim)
 
 
+-- | Create a new channel, returning its write and read ends.
 newChan :: Prim a=> IO (InChan a, OutChan a)
 newChan = newChanStarting (maxBound - 10) 
     -- lets us test counter overflow in tests and normal course of operation
