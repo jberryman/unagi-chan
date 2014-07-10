@@ -1,12 +1,14 @@
-name:                chan-split-fast
+name:                unagi-chan
 version:             0.1.0.0
--- synopsis:            
--- description:         
+
+synopsis:            Fast and scalable concurrent queues for x86, with a Chan-like API
+
+description:         TODO
+
 license:             BSD3
 license-file:        LICENSE
 author:              Brandon Simmons
 maintainer:          brandon.m.simmons@gmail.com
--- copyright:           
 category:            Concurrency
 build-type:          Simple
 -- extra-source-files:  
@@ -27,7 +29,7 @@ library
                      , Data.Atomics.Counter.Fat
 
   ghc-options:        -Wall -funbox-strict-fields
-  build-depends:       base < 5
+  build-depends:       base
                      , atomic-primops==0.6.0.5
                      , primitive>=0.5.3
   default-language:    Haskell2010
@@ -80,7 +82,7 @@ benchmark single
   default-language:   Haskell2010
   default-extensions: CPP
   build-depends: base
-               , chan-split-fast
+               , unagi-chan
                , criterion
   if flag(compare-benchmarks)
       cpp-options: -DCOMPARE_BENCHMARKS
@@ -90,6 +92,9 @@ benchmark single
   main-is:        single.hs
   ghc-options:    -with-rtsopts=-N1
 
+-- To run comparison benchmark used in graph above, run:
+--     $ cabal configure --enable-benchmarks -fcompare-benchmarks
+--     $ cabal bench multi --benchmark-option=-omulti3.html --benchmark-option='Demo'
 benchmark multi
   type:               exitcode-stdio-1.0
   ghc-options:        -Wall -O2 -threaded -funbox-strict-fields -fforce-recomp -rtsopts
@@ -97,7 +102,7 @@ benchmark multi
   default-language:   Haskell2010
   default-extensions: CPP
   build-depends: base
-               , chan-split-fast
+               , unagi-chan
                , criterion
   if flag(compare-benchmarks)
       cpp-options: -DCOMPARE_BENCHMARKS
@@ -130,6 +135,6 @@ executable dev-example
   main-is: Main.hs
   build-depends:       base
                      , stm
-                     , chan-split-fast
+                     , unagi-chan
   default-language:    Haskell2010
 

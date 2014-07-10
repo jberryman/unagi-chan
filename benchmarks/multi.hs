@@ -26,9 +26,13 @@ main = do
 #endif
 
   procs <- getNumCapabilities
+  unless (even procs) $
+    error "Please run with +RTS -NX, where X is an even number"
   let procs_div2 = procs `div` 2
   if procs_div2 >= 0 then return ()
                      else error "Run with RTS +N2 or more"
+
+  putStrLn $ "Running with capabilities: "++(show procs)
 
   (fill_empty_fastUI, fill_empty_fastUO) <- U.newChan
   (fill_empty_fastUUI, fill_empty_fastUUO) <- UU.newChan -- TODO WHY IS THIS COMPILING BELOW???
@@ -41,7 +45,7 @@ main = do
 
   defaultMain $
     [ bgroup ("Operations on "++(show n)++" messages") $
-        [ bgroup "chan-split-fast Unagi" $
+        [ bgroup "unagi-chan Unagi" $
               -- this gives us a measure of effects of contention between
               -- readers and writers when compared with single-threaded
               -- version:
@@ -68,7 +72,7 @@ main = do
 
               , bench "async Int writer, main thread read and sum" $ nfIO $ asyncSumIntUnagi n
               ]
-        , bgroup "chan-split-fast Unagi.Unboxed" $
+        , bgroup "unagi-chan Unagi.Unboxed" $
               [ bench "async 1 writers 1 readers" $ asyncReadsWritesUnagiUnboxed 1 1 n
               , bench "oversubscribing: async 100 writers 100 readers" $ asyncReadsWritesUnagiUnboxed 100 100 n
               -- TODO using Ints here instead of (); change others so we can properly compare?
@@ -142,10 +146,26 @@ main = do
          -}
 #endif
          ]
+#ifdef COMPARE_BENCHMARKS
+    -- This is our set of benchmarks we use to create the graph we'll use in
+    -- the haddocks to demo performance
+    , bgroup ("Demo with messages x"++show n) $
+        let runs = [1..procs_div2]
+            benchRun c = bench ("with "++(show c)++ "readers and "++(show c)++" writers")
+         in [ bgroup "Unagi        " $
+                map (\c-> benchRun c $ asyncReadsWritesUnagi c c n) runs
+            , bgroup "Unagi.Unboxed" $
+                map (\c-> benchRun c $ asyncReadsWritesUnagiUnboxed c c n) runs
+            , bgroup "TQueue       " $
+                map (\c-> benchRun c $ asyncReadsWritesTQueue c c n) runs
+            , bgroup "Chan         " $
+                map (\c-> benchRun c $ asyncReadsWritesChan c c n) runs
+            ]
+#endif
     ]
 
 
--- TODO maybe factor out reads writes to avoid boilerplate??
+-- TODO maybe factor out reads/writes/news, and hope they get inlined
 
 asyncReadsWritesUnagi :: Int -> Int -> Int -> IO ()
 asyncReadsWritesUnagi writers readers n = do
