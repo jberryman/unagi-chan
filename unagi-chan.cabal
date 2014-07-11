@@ -1,5 +1,5 @@
 name:                unagi-chan
-version:             0.1.0.1
+version:             0.1.0.2
 
 synopsis:            Fast and scalable concurrent queues for x86, with a Chan-like API
 
@@ -84,6 +84,16 @@ test-suite test
   -- I guess we need to put 'src' here to get access to Internal modules
   hs-source-dirs: tests, src
   main-is: Main.hs
+  other-modules:
+      Atomics
+    , Chan003
+    , Deadlocks
+    , DupChan
+    , Implementations
+    , IndexedMVar
+    , Smoke
+    , Unagi
+    , UnagiUnboxed
   build-depends:       base
                      , primitive>=0.5.3
                      , atomic-primops==0.6.0.5
