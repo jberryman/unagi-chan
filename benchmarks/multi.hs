@@ -49,23 +49,23 @@ main = do
               -- this gives us a measure of effects of contention between
               -- readers and writers when compared with single-threaded
               -- version:
-              [ bench "async 1 writers 1 readers" $ asyncReadsWritesUnagi 1 1 n
+              [ bench "async 1 writers 1 readers" $ nfIO $ asyncReadsWritesUnagi 1 1 n
               -- This is measuring the effects of bottlenecks caused by
               -- descheduling, context-switching overhead (forced by
               -- fairness properties in the case of MVar), as well as
               -- all of the above; this is probably less than
               -- informative. Try threadscope on a standalone test:
-              , bench "oversubscribing: async 100 writers 100 readers" $ asyncReadsWritesUnagi 100 100 n
+              , bench "oversubscribing: async 100 writers 100 readers" $ nfIO $ asyncReadsWritesUnagi 100 100 n
               -- NOTE: this is a bit hackish, filling in one test and
               -- reading in the other; make sure memory usage isn't
               -- influencing mean:
               -- This measures writer/writer contention:
-              , bench ("async "++(show procs)++" writers") $ do
+              , bench ("async "++(show procs)++" writers") $ nfIO $ do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
                   mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (U.writeChan fill_empty_fastUI ()) >> putMVar done1 ()) $ zip starts dones
                   mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
               -- This measures reader/reader contention:
-              , bench ("async "++(show procs)++" readers") $ do
+              , bench ("async "++(show procs)++" readers") $ nfIO $ do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
                   mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (U.readChan fill_empty_fastUO) >> putMVar done1 ()) $ zip starts dones
                   mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
@@ -73,14 +73,14 @@ main = do
               , bench "async Int writer, main thread read and sum" $ nfIO $ asyncSumIntUnagi n
               ]
         , bgroup "unagi-chan Unagi.Unboxed" $
-              [ bench "async 1 writers 1 readers" $ asyncReadsWritesUnagiUnboxed 1 1 n
-              , bench "oversubscribing: async 100 writers 100 readers" $ asyncReadsWritesUnagiUnboxed 100 100 n
+              [ bench "async 1 writers 1 readers" $ nfIO $ asyncReadsWritesUnagiUnboxed 1 1 n
+              , bench "oversubscribing: async 100 writers 100 readers" $ nfIO $ asyncReadsWritesUnagiUnboxed 100 100 n
               -- TODO using Ints here instead of (); change others so we can properly compare?
-              , bench ("async "++(show procs)++" writers") $ do
+              , bench ("async "++(show procs)++" writers") $ nfIO $ do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
                   mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (UU.writeChan fill_empty_fastUUI (0::Int)) >> putMVar done1 ()) $ zip starts dones
                   mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
-              , bench ("async "++(show procs)++" readers") $ do
+              , bench ("async "++(show procs)++" readers") $ nfIO $ do
                   dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
                   mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (UU.readChan fill_empty_fastUUO) >> putMVar done1 ()) $ zip starts dones
                   mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones

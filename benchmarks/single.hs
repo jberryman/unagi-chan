@@ -36,8 +36,8 @@ main = do
     -- Very artificial; just adding up the costs of the takes/puts/reads
     -- involved in getting a single message in and out
     [ bgroup "Latency micro-benchmark" $
-        [ bench "unagi-chan Unagi" (U.writeChan fastEmptyUI () >> U.readChan fastEmptyUO)
-        , bench "unagi-chan Unagi.Unboxed" (UU.writeChan fastEmptyUUI (0::Int) >> UU.readChan fastEmptyUUO) -- TODO comparing Int writing to (). Change?
+        [ bench "unagi-chan Unagi" $ nfIO (U.writeChan fastEmptyUI () >> U.readChan fastEmptyUO)
+        , bench "unagi-chan Unagi.Unboxed" $ nfIO (UU.writeChan fastEmptyUUI (0::Int) >> UU.readChan fastEmptyUUO) -- TODO comparing Int writing to (). Change?
 #ifdef COMPARE_BENCHMARKS
         , bench "Chan" (writeChan chanEmpty () >> readChan chanEmpty)
         , bench "TQueue" (atomically (writeTQueue tqueueEmpty () >>  readTQueue tqueueEmpty))
@@ -51,8 +51,8 @@ main = do
         ]
     , bgroup ("Throughput with "++show n++" messages") $
         [ bgroup "sequential write all then read all" $
-              [ bench "unagi-chan Unagi" $ runtestSplitChanU1 n
-              , bench "unagi-chan Unagi.Unboxed" $ runtestSplitChanUU1 n
+              [ bench "unagi-chan Unagi" $ nfIO $ runtestSplitChanU1 n
+              , bench "unagi-chan Unagi.Unboxed" $ nfIO $ runtestSplitChanUU1 n
 #ifdef COMPARE_BENCHMARKS
               , bench "Chan" $ runtestChan1 n
               , bench "TQueue" $ runtestTQueue1 n
@@ -61,8 +61,8 @@ main = do
 #endif
               ]
         , bgroup "repeated write some, read some" $ 
-              [ bench "unagi-chan Unagi" $ runtestSplitChanU2 n
-              , bench "unagi-chan Unagi.Unboxed" $ runtestSplitChanUU2 n
+              [ bench "unagi-chan Unagi" $ nfIO $ runtestSplitChanU2 n
+              , bench "unagi-chan Unagi.Unboxed" $ nfIO $ runtestSplitChanUU2 n
 #ifdef COMPARE_BENCHMARKS
               , bench "Chan" $ runtestChan2 n
               , bench "TQueue" $ runtestTQueue2 n
