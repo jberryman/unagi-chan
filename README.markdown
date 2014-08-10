@@ -1,4 +1,8 @@
-THIS IS A WIP
+The library is [available on hackage](http://hackage.haskell.org/package/unagi-chan)
+and you can install it with:
+
+    $ cabal install unagi-chan
+
 
 # Unagi
 

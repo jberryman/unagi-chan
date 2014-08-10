@@ -10,10 +10,10 @@ description:
     limited usefulness outside of x86 architectures where the fetch-and-add
     instruction is not available.
     .
-    Here is an example benchmark measuring the time taken to write and then
-    read 100,000 messages, with work divided amongst increasing number of
-    readers and writers (time in ms), comparing against the top-performing
-    queues in the standard libraries.
+    Here is an example benchmark measuring the time taken to concurrently write
+    and read 100,000 messages, with work divided amongst increasing number of
+    readers and writers, comparing against the top-performing queues in the
+    standard libraries. Scale is milliseconds.
     .
     <<http://i.imgur.com/safKkCP.png>>
     .
@@ -58,7 +58,10 @@ library
   if !arch(i386) && !arch(x86_64)
     cpp-options: -DNOT_x86
   
-
+-- TODO
+--  - replace constants with re-calculated, check performance, then replace, adding assertions instead (make that a helper function)
+--  - Do a benchmark of multiple queues running in parallel, to see if we are affected by global allocator issues with pinned memory:  http://thread.gmane.org/gmane.comp.lang.haskell.parallel/218
+--  - On next benchmarks run, cut out "Demo with messages..with" 
 -- Potential implementations roadmap (or we might just stick with this design
 -- for this package):
 --

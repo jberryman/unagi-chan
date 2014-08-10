@@ -34,8 +34,11 @@ import GHC.Exts(inline)
 nEW_SEGMENT_WAIT :: Int
 nEW_SEGMENT_WAIT = round (((14.6::Float) + 0.3*fromIntegral sEGMENT_LENGTH) / 3.7) + 10
 
+-- | The write end of a channel created with 'newChan'.
 data InChan a = InChan !(Ticket (Cell a)) !(ChanEnd a)
     deriving Typeable
+
+-- | The read end of a channel created with 'newChan'.
 newtype OutChan a = OutChan (ChanEnd a)
     deriving Typeable
 
@@ -316,7 +319,9 @@ newSegmentSource = do
 -- ----------
 
 
-
+-- TODO MOVE THIS INTO UTILITIES, ONCE WE DECIDE TO SETTLE ON SAME CONSTANTS
+--      (and move those into a "Constants" module), AND FACTOR OUT FROM
+--      Unagi.Unboxed, too.
 
 lOG_SEGMENT_LENGTH, sEGMENT_LENGTH_MN_1 :: Int
 lOG_SEGMENT_LENGTH = round $ logBase (2::Float) $ fromIntegral sEGMENT_LENGTH -- or bit shifts in loop
@@ -327,15 +332,3 @@ divMod_sEGMENT_LENGTH :: Int -> (Int,Int)
 divMod_sEGMENT_LENGTH n = let d = n `unsafeShiftR` lOG_SEGMENT_LENGTH
                               m = n .&. sEGMENT_LENGTH_MN_1
                            in d `seq` m `seq` (d,m)
-
-{- TESTS SKETCH
- - validate with some benchmarks
- - look over implementation for other assertions / micro-tests
- - Make sure we never get False returned on casIORef where we no no conflicts, i.e. no false negatives
-     - also include arbitrary delays between readForCAS and the CAS
- - (Not a test, but...) add a branch with a whole load of event logging that we can analyze (maybe in an automated test!)
- - perhaps run num_threads readers and writers, plus some threads that can inspect the queues
-    for bad descheduling conditions we want to avoid.
- - use quickcheck to generate 'new' chans that represent possible conditions and test those with write/read (or with our regular test suite?)
-    - we also want to test counter roll-over
- -}

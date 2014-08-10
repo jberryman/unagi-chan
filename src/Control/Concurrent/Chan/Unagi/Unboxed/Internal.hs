@@ -44,8 +44,11 @@ import Utilities
 nEW_SEGMENT_WAIT :: Int
 nEW_SEGMENT_WAIT = round (((14.6::Float) + 0.3*fromIntegral sEGMENT_LENGTH) / 3.7) + 10
 
+-- | The write end of a channel created with 'newChan'.
 newtype InChan a = InChan (ChanEnd a)
     deriving Typeable
+
+-- | The read end of a channel created with 'newChan'.
 newtype OutChan a = OutChan (ChanEnd a)
     deriving Typeable
 
