@@ -3,9 +3,6 @@ and you can install it with:
 
     $ cabal install unagi-chan
 
-
-# Unagi
-
 ## Design
 
 The idea is to design a queue around the x86 fetch-and-add instruction, which
