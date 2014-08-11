@@ -59,9 +59,12 @@ library
     cpp-options: -DNOT_x86
   
 -- TODO
---  - replace constants with re-calculated, check performance, then replace, adding assertions instead (make that a helper function)
---  - Do a benchmark of multiple queues running in parallel, to see if we are affected by global allocator issues with pinned memory:  http://thread.gmane.org/gmane.comp.lang.haskell.parallel/218
---  - On next benchmarks run, cut out "Demo with messages..with" 
+--  - Do a benchmark of multiple queues running in parallel, to see if we are
+--     affected by global allocator issues with pinned memory:
+--     http://thread.gmane.org/gmane.comp.lang.haskell.parallel/218
+--  - On next benchmarks run, cut out "Demo with messages..with" and make unagi 
+--     view overlayed with drop shadow
+--
 -- Potential implementations roadmap (or we might just stick with this design
 -- for this package):
 --
@@ -153,7 +156,7 @@ flag dev
 
 -- for profiling, checking out core, etc
 executable dev-example
-  -- for n in `find dist/build/core-example/core-example-tmp -name '*dump-simpl'`; do cp $n "core-example/$(basename $n).$(git rev-parse --abbrev-ref HEAD)"; done
+  -- for n in `find dist/build/dev-example/dev-example-tmp -name '*dump-simpl'`; do cp $n "core-example/$(basename $n).$(git rev-parse --abbrev-ref HEAD)"; done
   if !flag(dev)
     buildable: False
   else
@@ -169,7 +172,7 @@ executable dev-example
   --ghc-options: -threaded -with-rtsopts=-N2
   --ghc-options: -eventlog
   -- ...or do non-threaded runtime
-  ghc-prof-options: -fprof-auto
+  --ghc-prof-options: -fprof-auto
   --Relevant profiling RTS settings:  -xt
   -- TODO also check out +RTS -A10m, and look at output of -sstderr
 
