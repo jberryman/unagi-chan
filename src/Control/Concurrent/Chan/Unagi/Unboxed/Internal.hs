@@ -37,12 +37,7 @@ import Data.Typeable(Typeable)
 import GHC.Exts(inline)
 import Utilities
 
-
--- Number of reads on which to spin for new segment creation.
--- Back-of-envelope (time_to_create_new_segment / time_for_read_IOref) + margin.
--- See usage site.
-nEW_SEGMENT_WAIT :: Int
-nEW_SEGMENT_WAIT = round (((14.6::Float) + 0.3*fromIntegral sEGMENT_LENGTH) / 3.7) + 10
+import Control.Concurrent.Chan.Unagi.Constants
 
 -- | The write end of a channel created with 'newChan'.
 newtype InChan a = InChan (ChanEnd a)
@@ -127,11 +122,6 @@ segSource = do
                 (P.alignment (undefined :: a))
     P.setByteArray sigArr 0 sEGMENT_LENGTH cellEmpty
     return (sigArr, ElementArray eArr)
-
-
-sEGMENT_LENGTH :: Int
-{-# INLINE sEGMENT_LENGTH #-}
-sEGMENT_LENGTH = 1024 -- NOTE: THIS MUST REMAIN A POWER OF 2!
 
 
 data Stream a = 
@@ -327,14 +317,3 @@ waitingAdvanceStream nextSegRef = go where
                  Next strNext -> return strNext
                  _ -> error "Impossible! This should only have been Next segment"
          Next strNext -> return strNext
-
-
-lOG_SEGMENT_LENGTH, sEGMENT_LENGTH_MN_1 :: Int
-lOG_SEGMENT_LENGTH = round $ logBase (2::Float) $ fromIntegral sEGMENT_LENGTH -- or bit shifts in loop
-sEGMENT_LENGTH_MN_1 = sEGMENT_LENGTH - 1
-
-divMod_sEGMENT_LENGTH :: Int -> (Int,Int)
-{-# INLINE divMod_sEGMENT_LENGTH #-}
-divMod_sEGMENT_LENGTH n = let d = n `unsafeShiftR` lOG_SEGMENT_LENGTH
-                              m = n .&. sEGMENT_LENGTH_MN_1
-                           in d `seq` m `seq` (d,m)

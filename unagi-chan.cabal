@@ -1,5 +1,5 @@
 name:                unagi-chan
-version:             0.1.0.2
+version:             0.1.1.0
 
 synopsis:            Fast and scalable concurrent queues for x86, with a Chan-like API
 
@@ -45,6 +45,7 @@ library
 
   other-modules:       Control.Concurrent.Chan.Unagi.Internal
                      , Control.Concurrent.Chan.Unagi.Unboxed.Internal
+                     , Control.Concurrent.Chan.Unagi.Constants
                      , Utilities
                      , Data.Atomics.Counter.Fat
 
