@@ -60,6 +60,8 @@ library
   -- We'll need some additional barriers for correctness:
   if !arch(i386) && !arch(x86_64)
     cpp-options: -DNOT_x86
+
+  extra-source-files: CHANGELOG.markdown
   
 -- TODO
 --  - Do a benchmark of multiple queues running in parallel, to see if we are
