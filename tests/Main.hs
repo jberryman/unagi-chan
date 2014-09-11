@@ -20,6 +20,7 @@ import IndexedMVar
 
 main :: IO ()
 main = do 
+    -- Make sure testing environment is sane:
     assertionsWorking <- try $ assert False $ return ()
     case assertionsWorking of
          Left (AssertionFailed _) -> putStrLn "Assertions: On"
