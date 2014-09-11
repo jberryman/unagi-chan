@@ -43,7 +43,6 @@ instance Eq (OutChan a) where
     (OutChan (ChanEnd _ _ _ _ headA)) == (OutChan (ChanEnd _ _ _ _ headB))
         = headA == headB
 
--- TODO USE RECORD SYNTAX, PROBS
 data ChanEnd a = 
             -- For efficient div and mod:
     ChanEnd !Int  -- logBase 2 BOUNDS
@@ -316,7 +315,7 @@ waitingAdvanceStream role nextSegRef segSource = go where
          _ -> error "Impossible! This should only have been Next segment"
 
   readerUnblockAndReturn tk =
-    let winner@(installedBy,strAlreadyInstalled,checkpt) = peekNext tk
+    let won@(installedBy,strAlreadyInstalled,checkpt) = peekNext tk
      -- if a writer won, try to set as installedBy reader so that every writer
      -- to this seg doesn't have to check in, and unblockWriters
      in if role == reader && installedBy == writer 
@@ -328,7 +327,7 @@ waitingAdvanceStream role nextSegRef segSource = go where
               peekNext . snd
                 -- TODO BENCHMARK OMITING AND RETURNING PREVIOUS.
                 <$> cas tk strAlreadyInstalled checkpt -- as installedBy == reader
-            else return winner
+            else return won
 
   go wait = assert (wait >= 0) $ do
     tk <- readForCAS nextSegRef
@@ -345,8 +344,14 @@ waitingAdvanceStream role nextSegRef segSource = go where
                potentialCheckptNext <- WriterCheckpoint <$> newEmptyMVar
                -- This may fail because of either a competing reader or writer
                -- which certainly modified this to a Next value:
-               cas tk potentialStrNext potentialCheckptNext
-                 >>= readerUnblockAndReturn . snd
+               (_,won) <- cas tk potentialStrNext potentialCheckptNext
+   
+#ifdef NOT_x86 
+               -- ensure strNext is in place before unblocking writers, where
+               -- CAS is not a full barrier:
+               writeBarrier
+#endif
+               readerUnblockAndReturn won
                 
          -- Fast path: Another reader or writer has already advanced the
          -- stream. Most likely reader 0 of the last segment.
@@ -368,16 +373,9 @@ newSegmentSource size = do
 -- writerCheckin) waiting to proceed. 
 newtype WriterCheckpoint = WriterCheckpoint (MVar ())
 
--- TODO MOVE THIS TO CALLER.
 -- idempotent
 unblockWriters :: WriterCheckpoint -> IO ()
-unblockWriters (WriterCheckpoint v) = do
-    -- above we CAS the next segref, which ought to be a full barrier on x86
-    -- TODO WHY DO WE NEED THE BARRIER?
-#ifdef NOT_x86 
-    -- ...else we need:
-    writeBarrier
-#endif
+unblockWriters (WriterCheckpoint v) =
     void $ tryPutMVar v ()
 
 -- A writer knows that it doesn't need to call this when:
