@@ -71,8 +71,12 @@ findInsert i mv = ins where
 -- 
 nextHighestPowerOfTwo :: Int -> Int
 nextHighestPowerOfTwo 0 = 1
-nextHighestPowerOfTwo n =  
-    let !nhp2 = 2 ^ (ceiling (logBase 2 $ fromIntegral $ abs n :: Float) :: Int)
-        -- ensure return value is actually a positive power of 2:
-     in assert (nhp2 > 0 && popCount (fromIntegral nhp2 :: Word) == 1)
-            nhp2
+nextHighestPowerOfTwo n 
+    | n > maxPowerOfTwo = error $ "The next power of two greater than "++(show n)++" exceeds the highest value representable by Int."
+    | otherwise = 
+        let !nhp2 = 2 ^ (ceiling (logBase 2 $ fromIntegral $ abs n :: Float) :: Int)
+         -- ensure return value is actually a positive power of 2:
+         in assert (nhp2 > 0 && popCount (fromIntegral nhp2 :: Word) == 1)
+              nhp2
+
+  where maxPowerOfTwo = (floor $ sqrt $ (fromIntegral (maxBound :: Int)::Float)) ^ (2::Int)
