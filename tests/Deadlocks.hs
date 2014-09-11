@@ -11,7 +11,7 @@ import Implementations
 deadlocksMain :: IO ()
 deadlocksMain = do
     let tries = 50000
-    
+
     putStrLn "==================="
     putStrLn "Testing Unagi:"
     -- ------
@@ -34,6 +34,19 @@ deadlocksMain = do
     checkDeadlocksWriter unboxedUnagiImpl tries
     putStrLn "OK"
 
+    putStrLn "==================="
+    putStrLn "Testing Unagi.Bounded:"
+    -- ------
+    putStr $ "    Checking for deadlocks from killed reader, x"++show tries++"... "
+    -- bounds must be > 10000 here (note actual bounds rounded up to power of 2):
+    checkDeadlocksReader (unagiBoundedImpl 50000) tries
+    putStrLn "OK"
+    -- ------
+    putStr $ "    Checking for deadlocks from killed writer, x"++show tries++"... "
+    -- fragile bounds must be large enought to never be reached here:
+    checkDeadlocksWriter (unagiBoundedImpl (2^(17::Int))) tries
+        `onException` putStrLn "NOTE: probably a test issue, not a bug, but please report."
+    putStrLn "OK"
 
 
 -- -- Chan002.hs -- --
