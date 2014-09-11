@@ -1,7 +1,9 @@
 module Control.Concurrent.Chan.Unagi (
 {- | General-purpose concurrent FIFO queue. If you are trying to send messages
-   of a primitive unboxed type, you may wish to use "Control.Concurrent.Chan.Unagi.Unboxed"
-   which should be slightly faster and perform better when a queue grows very large.
+   of a primitive unboxed type, you may wish to use
+   "Control.Concurrent.Chan.Unagi.Unboxed" which should be slightly faster and
+   perform better when a queue grows very large. See also the bounded variant
+   at "Control.Concurrent.Chan.Unagi.Bounded".
  -}
     -- * Creating channels
       newChan

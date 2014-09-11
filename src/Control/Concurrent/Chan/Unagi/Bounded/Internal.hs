@@ -1,7 +1,6 @@
 {-# LANGUAGE BangPatterns , DeriveDataTypeable, CPP #-}
 module Control.Concurrent.Chan.Unagi.Bounded.Internal
-    (sEGMENT_LENGTH
-    , InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell(..), Stream(..)
+    ( InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell(..), Stream(..)
     , NextSegment(..), StreamHead(..)
     , newChanStarting, writeChan, readChan, readChanOnException
     -- TODO immediate failing write
@@ -26,6 +25,8 @@ import Data.Bits
 import Data.Typeable(Typeable)
 import GHC.Exts(inline)
 
+import Utilities(nextHighestPowerOfTwo)
+
 
 -- | The write end of a channel created with 'newChan'.
 data InChan a = InChan !(Ticket (Cell a)) !(ChanEnd a)
@@ -42,6 +43,7 @@ instance Eq (OutChan a) where
     (OutChan (ChanEnd _ _ _ _ headA)) == (OutChan (ChanEnd _ _ _ _ headB))
         = headA == headB
 
+-- TODO USE RECORD SYNTAX, PROBS
 data ChanEnd a = 
             -- For efficient div and mod:
     ChanEnd !Int  -- logBase 2 BOUNDS
@@ -52,22 +54,18 @@ data ChanEnd a =
             !AtomicCounter 
             -- the stream head; this must never point to a segment whose offset
             -- is greater than the counter value
-            !(IORef (StreamHead a))
+            !(IORef (StreamHead a)) -- NOTE [1]
     deriving Typeable
+ -- [1] For the writers' ChanEnd: the segment that appears in the StreamHead is
+ -- implicitly unlocked for writers (the segment size being equal to the chan
+ -- bounds). See 'writeChan' for notes on how we make sure to keep this
+ -- invariant.
 
 data StreamHead a = StreamHead !Int !(Stream a)
 
 -- This is always of length BOUNDS
 type StreamSegment a = P.MutableArray RealWorld (Cell a)
 
--- TRANSITIONS and POSSIBLE VALUES:
---   During Read:
---     Empty   -> Blocking
---     Written
---     Blocking (only when dupChan used)
---   During Write:
---     Empty   -> Written 
---     Blocking
 data Cell a = Empty | Written a | Blocking !(MVar a)
 
 data Stream a = 
@@ -79,11 +77,49 @@ data Stream a =
            !(IORef (NextSegment a))
            -- writers that find NoSegment above, must check in with a possibly
            -- blocking readMVar here before proceeding (the slow path):
-           !WriterCheckpoint
 
-data NextSegment a = NoSegment | Next !(Stream a)
 
-newChanStarting :: Int -> IO (InChan a, OutChan a)
+-- Empty, else contains the next segment, a marker indicating who installed the
+-- segment (a reader or writer), and the WriterCheckpoint which controls
+-- blocking for that segment.
+data NextSegment a = NoSegment 
+                   | Next !Role
+                          !(Stream a)
+                          !WriterCheckpoint
+
+type Role = Int
+writer, reader :: Role -- indicates: created by $role
+writer = 0
+reader = 1
+
+-- WRITER BLOCKING SCHEME OVERVIEW
+-- -------------------------------
+-- We use segments of size equal to the requested bounds. When a reader reads
+-- index 0 of a segment it tries to pre-allocate the next segment, marking it
+-- installedBy reader, which indicates to writers who read it that they may
+-- write and return without blocking (and this makes the queue loosely bounded
+-- between size n and n*2).
+--
+-- Whenever a reader encounters a segment (in waitingAdvanceStream) installedBy
+-- writer it unblocks writers and rewrites the installedBy indicator to
+-- 'reader'.
+--
+-- Writers first make their write available (by writing to the segment) before
+-- doing any blocking. This is more efficient, lets us handle async exceptions
+-- in a principled way without changing the semantics. This also means that in
+-- some cases a writer will install the next segment, marked installedBy
+-- writer, insicating that writers must checkin and block; readers will mark
+-- these segments as installedBy reader to avoid unnecessary overhead when the
+-- segment becomes unlocked.
+--
+-- The writer StreamHead is only ever updated by a writer that sees that a
+-- segment is unlocked for writing (either because the writer has returned from
+-- blocking on that segment, or because it sees that it was installed by a
+-- reader); in this way a writer knows if its segment is at the StreamHead that
+-- it is free to write and return without blocking (writerCheckin).
+
+
+newChanStarting :: Int -> Int -> IO (InChan a, OutChan a)
 {-# INLINE newChanStarting #-}
 newChanStarting !startingCellOffset !sizeDirty = do
     let !size = nextHighestPowerOfTwo sizeDirty
@@ -94,10 +130,8 @@ newChanStarting !startingCellOffset !sizeDirty = do
     firstSeg <- segSource
     -- collect a ticket to save for writer CAS
     savedEmptyTkt <- readArrayElem firstSeg 0
-    stream <- Stream firstSeg 
-                 -- TODO TEST THESE ARE BOTH FILLED ON FIRST READ:
-                 <$> newIORef NoSegment
-                 <*> (WriterCheckpoint <$> newEmptyMVar)
+     -- TODO TEST TO MAKE SURE VARS ARE BOTH FILLED ON FIRST READ:
+    stream <- Stream firstSeg <$> newIORef NoSegment
     let end = ChanEnd logBounds boundsMn1 segSource 
                   <$> newCounter (startingCellOffset - 1)
                   <*> newIORef (StreamHead startingCellOffset stream)
@@ -120,7 +154,7 @@ dupChan (InChan _ (ChanEnd logBounds boundsMn1 segSource counter streamHead)) = 
     
     counter' <- newCounter wCount 
     streamHead' <- newIORef hLoc
-    return $ OutChan (ChanEnd logBounds boundsMn1 segSource counter' streamHead')
+    return $ OutChan $ ChanEnd logBounds boundsMn1 segSource counter' streamHead'
   -- [1] We must read the streamHead before inspecting the counter; otherwise,
   -- as writers write, the stream head pointer may advance past the cell
   -- indicated by wCount.
@@ -137,46 +171,35 @@ dupChan (InChan _ (ChanEnd logBounds boundsMn1 segSource counter streamHead)) = 
 -- are masked. Thus writes always succeed once 'writeChan' is entered.
 writeChan :: InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
-writeChan (InChan savedEmptyTkt ce@(ChanEnd _ _ segSource _ _)) = \a-> mask_ $ do 
-    (segIx, (Stream seg next)) <- moveToNextCell ce
+writeChan (InChan savedEmptyTkt ce) = \a-> mask_ $ do 
+    (segIx, Stream seg _, updateStreamHeadIfNecessary, writerCheckinCont) <- moveToNextCell writer ce
     (success,nonEmptyTkt) <- casArrayElem seg segIx savedEmptyTkt (Written a)
-    -- try to pre-allocate next segment; NOTE [1]
-    when (segIx == 0) $ void $
-      waitingAdvanceStream next segSource 0
-    when (not success) $
-        case peekTicket nonEmptyTkt of
-             Blocking v -> putMVar v a
-             Empty      -> error "Stored Empty Ticket went stale!" -- NOTE [2]
-             Written _  -> error "Nearly Impossible! Expected Blocking"
-  -- [1] the writer which arrives first to the first cell of a new segment is
-  -- tasked (somewhat arbitrarily) with trying to pre-allocate the *next*
-  -- segment hopefully ahead of any readers or writers who might need it. This
-  -- will race with any reader *or* writer that tries to read the next segment
-  -- and finds it's empty (see `waitingAdvanceStream`); when this wins
-  -- (hopefully the vast majority of the time) we avoid a throughput hit.
-  --
-  -- [2] this assumes that the compiler is statically-allocating Empty, sharing
-  -- the constructor among all uses, and that it never moves it between
-  -- checking the pointer stored in the array and checking the pointer in the
-  -- cached Any Empty value. If this is incorrect then the Ticket approach to
-  -- CAS is equally incorrect (though maybe less likely to fail).
+    if success
+      then writerCheckinCont
+      -- If CAS failed then a reader beat us, so we know we're not out of
+      -- bounds and don't need to writerCheckin
+      else case peekTicket nonEmptyTkt of
+                Blocking v -> putMVar v a
+                Empty      -> error "Stored Empty Ticket went stale!"
+                Written _  -> error "Nearly Impossible! Expected Blocking"
+    
+    updateStreamHeadIfNecessary  -- NOTE [1] 
+ -- [1] At this point we know that 'seg' is unlocked for writers because a
+ -- reader unblocked us, so it's safe to update the StreamHead with this
+ -- segment (if we moved to a new segment). This way we maintain the invariant
+ -- that the StreamHead segment is always known "unlocked" to writers.
 
 
--- We would like our queue to behave like Chan in that an async exception
--- raised in a reader known to be blocked or about to block on an empty queue
--- never results in a lost message; this matches our simple intuition about the
--- mechanics of a queue: if you're last in line for a cupcake and have to leave
--- you wouldn't expect the cake that would have gone to you to disappear.
---
--- But there are other systems that a busy cake shop might use that you could
--- easily imagine resulting in a lost cake, and that's a different question
--- from whether cakes are given to well-behaved customers in the order they
--- came out of the oven, or whether a customer leaving at the wrong moment
--- might cause the cake shop to burn down...
 readChanOnExceptionUnmasked :: (IO a -> IO a) -> OutChan a -> IO a
 {-# INLINE readChanOnExceptionUnmasked #-}
-readChanOnExceptionUnmasked h = \(OutChan ce)-> do
-    (segIx, (Stream seg _)) <- moveToNextCell ce
+readChanOnExceptionUnmasked h = \(OutChan ce@(ChanEnd _ _ segSource _ _))-> do
+    (segIx, Stream seg next, updateStreamHeadIfNecessary, _) <- moveToNextCell reader ce
+    -- try to pre-allocate next segment:
+    when (segIx == 0) $ void $
+      waitingAdvanceStream reader next segSource 0
+
+    updateStreamHeadIfNecessary
+
     cellTkt <- readArrayElem seg segIx
     case peekTicket cellTkt of
          Written a -> return a
@@ -219,10 +242,13 @@ readChanOnException :: OutChan a -> (IO a -> IO ()) -> IO a
 readChanOnException c h = mask_ $ 
     readChanOnExceptionUnmasked (\io-> io `onException` (h io)) c
 
--- formerly `moveToNextCell`
-getCellAssignment :: 
-{-# INLINE getCellAssignment #-}
-getCellAssignment (ChanEnd boundsMn1 logBounds segSource counter streamHead) = do
+
+-- increments counter, finds stream segment of corresponding cell (updating the
+-- stream head pointer as needed), and returns the stream segment and relative
+-- index of our cell.
+moveToNextCell :: Role -> ChanEnd a -> IO (Int, Stream a, IO (), IO ())
+{-# INLINE moveToNextCell #-}
+moveToNextCell role (ChanEnd logBounds boundsMn1 segSource counter streamHead) = do
     (StreamHead offset0 str0) <- readIORef streamHead
 #ifdef NOT_x86 
     -- fetch-and-add is a full barrier on x86
@@ -230,135 +256,110 @@ getCellAssignment (ChanEnd boundsMn1 logBounds segSource counter streamHead) = d
 #endif
     ix <- incrCounter 1 counter
     let !relIx = ix - offset0
-        !segsAway = relIx `unsafeShiftR` logBounds -- div
-        !segIx    = relIx .&. boundsMn1            -- mod
-    assert (relIx >= 0) $
-     return (segsAway, segIx, ...)
-
-     ... ORRRRR maybe we keep it , but pass in the stream finder function.
-
-{-
--- DEPRECATED!!
--- increments counter, finds stream segment of corresponding cell (updating the
--- stream head pointer as needed), and returns the stream segment and relative
--- index of our cell.
-moveToNextCell :: ChanEnd a -> IO (Int, Stream a)
-{-# INLINE moveToNextCell #-}
-moveToNextCell (ChanEnd segSource counter streamHead) = do
-    (StreamHead offset0 str0) <- readIORef streamHead
-    -- NOTE [3]
-#ifdef NOT_x86 
-    -- fetch-and-add is a full barrier on x86; otherwise we need to make sure
-    -- the read above occurrs before our fetch-and-add:
-    loadLoadBarrier
-#endif
-    ix <- incrCounter 1 counter
-    let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
-                 divMod_sEGMENT_LENGTH $! (ix - offset0)
-              -- (ix - offset0) `quotRem` sEGMENT_LENGTH
+        !segsAway = relIx `unsafeShiftR` logBounds -- `div` bounds
+        !segIx    = relIx .&. boundsMn1            -- `mod` bounds
+        ~nEW_SEGMENT_WAIT = (boundsMn1 `div` 12) + 25 
+    
         {-# INLINE go #-}
-        go 0 str = return str
-        go !n (Stream _ next) =
-            waitingAdvanceStream next segSource (nEW_SEGMENT_WAIT*segIx) -- NOTE [1]
+        go  0 xyz                   = return xyz
+        go !n (_, Stream _ next, _) =
+            waitingAdvanceStream role next segSource (nEW_SEGMENT_WAIT*segIx) -- NOTE [1]
               >>= go (n-1)
-    str <- go segsAway str0
-    when (segsAway > 0) $ do
-        let !offsetN = 
-              offset0 + (segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH) --(segsAway*sEGMENT_LENGTH)
-        writeIORef streamHead $ StreamHead offsetN str -- NOTE [2]
-    return (segIx,str)
+    
+    let nullCheckpt = error "nullCheckpt inspected!" -- yes, I ought to refactor
+    (installedBy,str,checkpt) <- assert (relIx >= 0) $
+                                   go segsAway (reader,str0,nullCheckpt) -- NOTE [2]
+
+    -- reader always returns from waitingAdvanceStream with a segment marked
+    -- installedBy reader:
+    when (role == reader) $
+        assert (installedBy == reader) $ return ()
+
+    -- writers and readers must perform this continuation at different points:
+    let updateStreamHeadIfNecessary = 
+          when (segsAway > 0) $ do
+            let !offsetN = --(segsAway * bounds)
+                   offset0 + (segsAway `unsafeShiftL` logBounds) 
+            writeIORef streamHead $ StreamHead offsetN str -- NOTE [1]
+
+    -- and this is the continuation, run only in writers, which blocks on this
+    -- segments' WriterCheckpoint
+    let writerCheckinCont = assert (role == writer) $ 
+                              when (installedBy == writer) $
+                                writerCheckin checkpt
+
+    return (segIx, str, updateStreamHeadIfNecessary, writerCheckinCont)
   -- [1] All readers or writers needing to work with a not-yet-created segment
-  -- race to create it, but those past index 0 have progressively long waits; 20
-  -- is chosen as 20 readIORefs should be more than enough time for writer/reader
-  -- 0 to add the new segment (if it's not descheduled).
+  -- race to create it, but those past index 0 have progressively long waits.
+  -- The constant here is an approximation of the way we calculate it in
+  -- Control.Concurrent.Chan.Unagi.Constants.nEW_SEGMENT_WAIT
   --
-  -- [2] advancing the stream head pointer on segIx == sEGMENT_LENGTH - 1 would
-  -- be more correct, but this is simpler here. This may move the head pointer
-  -- BACKWARDS if the thread was descheduled, but that's not a correctness
-  -- issue.
-  --
-  -- [3] There is a theoretical race condition here: thread reads head and is
-  -- descheduled, meanwhile other readers/writers increment counter one full
-  -- lap; when we increment we think we've found our cell in what is actually a
-  -- very old segment. However in this scenario all addressable memory will
-  -- have been consumed just by the array pointers whivh haven't been able to
-  -- be GC'd. So I don't think this is something to worry about.
--}
+  -- [2] We start the loop with 'reader' effectively meaning that the head
+  -- segment was installed by a reader, or really just indicating that the
+  -- writer has no need to check-in for blocking. This is always the case for
+  -- the head stream; see `writeChan` NOTE 1.
 
-{- DEPR
--- thread-safely try to fill `nextSegRef` at the next offset with a new
--- segment, waiting some number of iterations (for other threads to handle it).
--- Returns nextSegRef's StreamSegment.
-waitingAdvanceStream :: IORef (NextSegment a) -> SegSource a 
-                     -> Int -> IO (Stream a)
-waitingAdvanceStream nextSegRef segSource = go where
-  go !wait = assert (wait >= 0) $ do
+
+
+-- TODO play with inlining and look at core; we'd like the conditionals to disappear
+-- INVARIANT: if role == reader, after returning, the nextSegRef will be marked
+--            installedBy reader
+waitingAdvanceStream :: Role -> IORef (NextSegment a) -> SegSource a 
+                     -> Int -> IO (Role,Stream a,WriterCheckpoint)
+waitingAdvanceStream role nextSegRef segSource = go where
+  cas tk str checkpt = casIORef nextSegRef tk (Next role str checkpt)
+
+  -- the 'nextSegRef' is only ever modified from NoSegment -> Next
+  peekNext tk = 
+    case peekTicket tk of
+         Next installedBy strNext checkpt -> (installedBy,strNext,checkpt)
+         _ -> error "Impossible! This should only have been Next segment"
+
+  readerUnblockAndReturn tk =
+    let winner@(installedBy,strAlreadyInstalled,checkpt) = peekNext tk
+     -- if a writer won, try to set as installedBy reader so that every writer
+     -- to this seg doesn't have to check in, and unblockWriters
+     in if role == reader && installedBy == writer 
+            then do 
+              unblockWriters checkpt  -- idempotent
+              -- This only loses to another reader cas-ing `Next reader
+              -- strAlreadyInstalled`, and we only really return it here in
+              -- order to do an assert in caller:
+              peekNext . snd
+                -- TODO BENCHMARK OMITING AND RETURNING PREVIOUS.
+                <$> cas tk strAlreadyInstalled checkpt -- as installedBy == reader
+            else return winner
+
+  go wait = assert (wait >= 0) $ do
     tk <- readForCAS nextSegRef
     case peekTicket tk of
+         -- Rare, slow path: In readers, we outran reader 0 of the previous
+         -- segment (or it was descheduled) who was tasked with setting this up
+         -- In writers, there are number writer threads > bounds, or reader 0
+         -- of previous segment was slow or descheduled.
          NoSegment 
            | wait > 0 -> go (wait - 1)
              -- Create a potential next segment and try to insert it:
            | otherwise -> do 
-               potentialStrNext <- Stream <$> segSource 
-                                          <*> newIORef NoSegment
-               (_,tkDone) <- casIORef nextSegRef tk (Next potentialStrNext)
-               -- If that failed another thread succeeded (no false negatives)
-               case peekTicket tkDone of
-                 Next strNext -> return strNext
-                 _ -> error "Impossible! This should only have been Next segment"
-         Next strNext -> return strNext
--}
+               potentialStrNext <- Stream <$> segSource <*> newIORef NoSegment
+               potentialCheckptNext <- WriterCheckpoint <$> newEmptyMVar
+               -- This may fail because of either a competing reader or writer
+               -- which certainly modified this to a Next value:
+               cas tk potentialStrNext potentialCheckptNext
+                 >>= readerUnblockAndReturn . snd
+                
+         -- Fast path: Another reader or writer has already advanced the
+         -- stream. Most likely reader 0 of the last segment.
+         _ -> readerUnblockAndReturn tk
 
--- These were formerly `waitingAdvanceStream`:
-
-advanceInStreamReader :: IORef (NextSegment a) -> WriterCheckpoint 
-                      -> SegSource a -> Int -> IO (Stream a)
-advanceInStreamReader nextSegRef segSource checkpt = go where
-  go !wait = assert (wait >= 0) $ do
-    tk <- readForCAS nextSegRef
-    case peekTicket tk of
-         -- rare: we outran reader 0 of the previous segment (or it was
-         -- descheduled) who was tasked with setting this up
-         NoSegment 
-           | wait > 0 -> go (wait - 1)
-             -- Create a potential next segment and try to insert it:
-           | otherwise -> do 
-               potentialStrNext <- Stream <$> segSource 
-                                          <*> newIORef NoSegment
-               (succeeded,tkDone) <- casIORef nextSegRef tk (Next potentialStrNext)
-               -- If that failed another reader thread succeeded (no false
-               -- negatives, and writer threads don't do this)
-               unblockWriters checkpt
-               case peekTicket tkDone of
-                 Next strNext -> return strNext
-                 _ -> error "Impossible! This should only have been Next segment"
-         Next strNext -> return strNext
--- TODO FACTOR OUT THE CAS NEW / UNBLOCK WRITERS BIT? MAKE SURE NO BARRIER NEEDED THERE!
-
-advanceInStreamWriter :: IORef (NextSegment a) -> WriterCheckpoint -> IO (Stream a)
-advanceInStreamWriter nextSegRef checkpt = do
-    tk <- readForCAS nextSegRef
-    case peekTicket tk of
-         -- slow path: if the segment we need isn't allocated yet, we check in,
-         -- expecting that when we unblock it will have been created by a
-         -- reader:
-         NoSegment -> do 
-            writerCheckin checkpt
-            nxt <- readIORef nextSegRef
-            case nxt of
-                 Next strNext -> return strNext
-                 _ -> error "Impossible! unblockWriters took effect before the segment was in place"
-         -- fast path:
-         Next strNext -> return strNext
-
-
--- fast segment creation
 type SegSource a = IO (StreamSegment a)
 
 newSegmentSource :: Int -> IO (SegSource a)
 newSegmentSource size = do
     arr <- P.newArray size Empty
     return (P.cloneMutableArray arr 0 size)
+
+
 
 -- TODO TESTS FOR THIS!
 
@@ -367,17 +368,21 @@ newSegmentSource size = do
 -- writerCheckin) waiting to proceed. 
 newtype WriterCheckpoint = WriterCheckpoint (MVar ())
 
-
+-- TODO MOVE THIS TO CALLER.
 -- idempotent
 unblockWriters :: WriterCheckpoint -> IO ()
 unblockWriters (WriterCheckpoint v) = do
     -- above we CAS the next segref, which ought to be a full barrier on x86
+    -- TODO WHY DO WE NEED THE BARRIER?
 #ifdef NOT_x86 
     -- ...else we need:
     writeBarrier
 #endif
     void $ tryPutMVar v ()
 
+-- A writer knows that it doesn't need to call this when:
+--   - its segment is in the StreamHead, or...
+--   - its segment was installedBy == reader
 writerCheckin :: WriterCheckpoint -> IO ()
 writerCheckin (WriterCheckpoint v) = do
 -- On GHC > 7.8 we have an atomic `readMVar`.  On earlier GHC readMVar is
@@ -392,3 +397,8 @@ writerCheckin (WriterCheckpoint v) = do
     loadLoadBarrier
     -- ... and proceed to readIORef the segment
     
+
+-- TESTS TODO!
+--   - WriterCheckpoint: ...
+--   - assertion/deadlock tests with chans of size 1,2,4
+--   - sanity tests for blocking in very controlled settings.
