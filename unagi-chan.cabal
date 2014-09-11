@@ -99,7 +99,6 @@ test-suite test
   main-is: Main.hs
   other-modules:
       Atomics
-    , Chan003
     , Deadlocks
     , DupChan
     , Implementations
