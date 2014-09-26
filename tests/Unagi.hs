@@ -36,6 +36,7 @@ unagiMain = do
     checkDeadlocksReaderUnagi tries
 
 
+-- TODO CONSIDER ADDING newChanStarting (or raplcing newChan) TO IMPLEMENTATIONS, AND CONSOLIDATE THESE IN Smoke.hs
 smoke :: Int -> IO ()
 smoke n = smoke1 n >> smoke2 n
 

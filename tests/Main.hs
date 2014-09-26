@@ -13,6 +13,7 @@ import DupChan
 -- implementation-specific tests:
 import Unagi
 import UnagiUnboxed
+import UnagiBounded
 
 -- Other
 import Atomics
@@ -51,3 +52,4 @@ main = do
     -- unagi-specific tests
     unagiMain
     unagiUnboxedMain
+    unagiBoundedMain

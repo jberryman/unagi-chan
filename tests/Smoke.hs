@@ -40,6 +40,7 @@ smokeMain = (do
     -- ------
     testContention unboxedUnagiImpl 2 2 1000000
 
+
     forM_ [1, 2, 4, 1024] $ \bounds-> do
         putStrLn "==================="
         putStrLn $ "Testing Unagi.Bounded with bounds "++(show bounds)
