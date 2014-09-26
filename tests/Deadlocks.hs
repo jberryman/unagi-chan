@@ -10,7 +10,7 @@ import Implementations
 
 deadlocksMain :: IO ()
 deadlocksMain = do
-    let tries = 50000
+    let tries = 10000
 
     putStrLn "==================="
     putStrLn "Testing Unagi:"
@@ -62,7 +62,7 @@ checkDeadlocksReader (newChan,writeChan,readChan,_) times = do
   procs <- getNumCapabilities
   let run _       0 = putStrLn ""
       run retries n = do
-         when (retries > (times `div` 5)) $
+         when (retries > (times `div` 3)) $
             error "This test is taking too long. Please retry, and if still failing send the log to me"
          (i,o) <- newChan
          -- if we don't have at least three cores, then we need to write enough messages in first, before killing reader.
@@ -72,7 +72,7 @@ checkDeadlocksReader (newChan,writeChan,readChan,_) times = do
                                 takeMVar wStart >> threadDelay 1 -- wait until we're writing
                                 return $ Just wid
                              
-                        else do replicateM_ 10000 $ writeChan i (0::Int)
+                        else do replicateM_ 15000 $ writeChan i (0::Int)
                                 return Nothing
          rStart <- newEmptyMVar
          rid <- forkIO $ (putMVar rStart () >> (forever $ void $ readChan o))

@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns , DeriveDataTypeable, CPP #-}
 module Control.Concurrent.Chan.Unagi.Bounded.Internal
     ( InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell(..), Stream(..)
-    , writerCheckin
+    , writerCheckin, unblockWriters, WriterCheckpoint(..)
     , NextSegment(..), StreamHead(..)
     , newChanStarting, writeChan, readChan, readChanOnException
     -- TODO immediate failing write
@@ -374,9 +374,6 @@ newSegmentSource size = do
     return (P.cloneMutableArray arr 0 size)
 
 
-
--- TODO TESTS FOR THIS!
-
 -- This begins empty, but several readers will `put` without coordination, to
 -- ensure it's filled. Meanwhile writers are blocked on a `readMVar` (see
 -- writerCheckin) waiting to proceed. 
@@ -403,9 +400,3 @@ writerCheckin (WriterCheckpoint v) = do
     -- make sure we can see the reader's segment creation once we unblock...
     loadLoadBarrier
     -- ... and proceed to readIORef the segment
-    
-
--- TESTS TODO!
---   - WriterCheckpoint: ...
---   - assertion/deadlock tests with chans of size 1,2,4
---   - sanity tests for blocking in very controlled settings.

@@ -10,6 +10,7 @@ import Control.Concurrent(forkIO,threadDelay)
 import Control.Concurrent.MVar
 import Control.Exception
 import Data.Atomics.Counter.Fat
+import Control.Applicative
 
 import Data.Maybe(isNothing)
 
@@ -32,9 +33,17 @@ unagiBoundedMain = do
     mapM_ correctFirstWriteRead [ maxBound - 5, maxBound - 4, maxBound - 3, maxBound, minBound, 0]
     putStrLn "OK"
     -- ------
-    let tries = 50000
+    let tries = 10000
     putStrLn $ "Checking for deadlocks from killed Unagi reader in a fancy way, x"++show tries
     checkDeadlocksReaderUnagiBounded tries
+    -- ------
+    putStrLn "==================="
+    putStrLn "Testing Unagi.Bounded components:"
+    -- ------
+    putStr "Checkpoint tests... "
+    checkpointTest1 100000000
+    checkpointTest2 100000000
+    putStrLn "OK"
 
 
 -- TODO NOTE WHEN WE FACTOR THIS OUT OF UNAGI*-SPECIFIC TESTS, make function closed over sEGMENT_LENGTH as we do here.
@@ -110,7 +119,7 @@ checkDeadlocksReaderUnagiBounded :: Int -> IO ()
 checkDeadlocksReaderUnagiBounded times = do
   let run 0 normalRetries numRace = putStrLn $ "Lates: "++(show normalRetries)++", Races: "++(show numRace)
       run n normalRetries numRace
-       | (normalRetries + numRace) > (times `div` 5) = error "This test is taking too long. Please retry, and if still failing send the log to me"
+       | (normalRetries + numRace) > (times `div` 3) = error "This test is taking too long. Please retry, and if still failing send the log to me"
        | otherwise = do
          -- we'll kill the reader with our special exception half the time,
          -- expecting that we never get our race condition on those runs:
@@ -169,3 +178,23 @@ checkDeadlocksReaderUnagiBounded times = do
   run times 0 0
   putStrLn ""
 
+-- idempotent & non-conflicting puts/takes
+checkpointTest1 :: Int -> IO ()
+checkpointTest1 n = do
+    x <- newEmptyMVar
+    checkpt <- UI.WriterCheckpoint <$> newEmptyMVar
+    void $ forkIO ((replicateM_ n $ UI.writerCheckin checkpt) >> putMVar x ())
+    threadDelay 10000
+    replicateM_ n $ UI.unblockWriters checkpt
+    takeMVar x `onException` putStrLn "checkpointTest1: Forked writerCheckin deadlocked!"
+
+-- No deadlocks in read:
+checkpointTest2 :: Int -> IO ()
+checkpointTest2 n = do
+    x <- newEmptyMVar
+    checkpt <- UI.WriterCheckpoint <$> newEmptyMVar
+    void $ forkIO ((replicateM_ n $ UI.writerCheckin checkpt) >> putMVar x ())
+    threadDelay 10000
+    UI.unblockWriters checkpt
+    replicateM_ n $ UI.writerCheckin checkpt
+    takeMVar x `onException` putStrLn "checkpointTest2: Forked writerCheckin deadlocked!"
