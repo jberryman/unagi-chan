@@ -37,6 +37,11 @@ unagiBoundedMain = do
     putStrLn $ "Checking for deadlocks from killed Unagi reader in a fancy way, x"++show tries
     checkDeadlocksReaderUnagiBounded tries
     -- ------
+    putStr "Test bounds blocking... "
+    forM_ [(1::Int),2,4,8] $ \n->
+        testBoundsBlocking (2^n)
+    putStrLn "OK"
+    -- ------
     putStrLn "==================="
     putStrLn "Testing Unagi.Bounded components:"
     -- ------
@@ -198,3 +203,43 @@ checkpointTest2 n = do
     UI.unblockWriters checkpt
     replicateM_ n $ UI.writerCheckin checkpt
     takeMVar x `onException` putStrLn "checkpointTest2: Forked writerCheckin deadlocked!"
+
+
+-- Test that our bounding works as expected
+testBoundsBlocking :: Int -> IO ()
+testBoundsBlocking bnds = do
+    v <- newEmptyMVar
+    (inC,outC) <- newChan bnds
+    -- make sure none of these block.
+    replicateM_ bnds $ writeChan inC ()
+    -- but this blocks
+    void $ forkIO $ writeChan inC () >> putMVar v ()
+    threadDelay 100000
+    noth <- tryTakeMVar v
+    unless (noth == Nothing) $
+        error "bnds+1 writeChan should have blocked!"
+    -- ...until:
+    readChan outC
+    takeMVar v `onException` putStrLn "Read should have unblocked bnds+1 writer"
+    -- Now we fork one which work together to fill remaining bnds-1 slots, without blocking:
+    (replicateM_ (bnds-1) $ writeChan inC ())
+        `onException` putStrLn "Writes should not have blocked in second segment"
+    -- now we're at 2x bounds.
+    -- This next, again, should block:
+    v2 <- newEmptyMVar 
+    void $ forkIO $ writeChan inC () >> putMVar v2 ()
+    threadDelay 100000
+    noth2 <- tryTakeMVar v2
+    unless (noth2 == Nothing) $
+        error "bnds*2+1 writeChan should have blocked!"
+    -- and unblock as soon as (but no sooner than after bnds reads):
+    replicateM_ (bnds-1) $ readChan outC
+    threadDelay 100000
+    noth3 <- tryTakeMVar v2
+    unless (noth3 == Nothing) $
+        error "bnds*2+1 writeChan should still have been blocked!"
+    -- now this should unblock:
+    readChan outC
+    takeMVar v2 `onException` putStrLn "Read should have unblocked bnds*2+1 writer"
+
+    
