@@ -178,7 +178,11 @@ dupChan (InChan _ (ChanEnd logBounds boundsMn1 segSource counter streamHead)) = 
 -- are masked. Thus writes always succeed once 'writeChan' is entered.
 writeChan :: InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
-writeChan (InChan savedEmptyTkt ce) = \a-> mask_ $ do 
+writeChan c = \a-> writeChanWithBlocking True c a
+
+writeChanWithBlocking :: Bool -> InChan a -> a -> IO ()
+{-# INLINE writeChanWithBlocking #-}
+writeChanWithBlocking canBlock (InChan savedEmptyTkt ce) a = mask_ $ do 
     (segIx, nextSeg, updateStreamHeadIfNecessary) <- moveToNextCell asWriter ce
     let (seg, writerCheckinCont) = case nextSeg of
           NextByWriter (Stream s _) checkpt -> (s, writerCheckin checkpt)
@@ -188,7 +192,7 @@ writeChan (InChan savedEmptyTkt ce) = \a-> mask_ $ do
     (success,nonEmptyTkt) <- casArrayElem seg segIx savedEmptyTkt (Written a)
     if success
       -- NOTE: We must only block AFTER writing to be async exception-safe.
-      then writerCheckinCont
+      then when canBlock $ writerCheckinCont
       -- If CAS failed then a reader beat us, so we know we're not out of
       -- bounds and don't need to writerCheckin
       else case peekTicket nonEmptyTkt of
