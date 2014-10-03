@@ -1,10 +1,10 @@
 {-# LANGUAGE BangPatterns , DeriveDataTypeable, CPP #-}
 module Control.Concurrent.Chan.Unagi.Bounded.Internal
     ( InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell(..), Stream(..)
-    , writerCheckin, unblockWriters, WriterCheckpoint(..)
+    , writerCheckin, unblockWriters, tryWriterCheckin, WriterCheckpoint(..)
     , NextSegment(..), StreamHead(..)
     , newChanStarting, writeChan, readChan, readChanOnException
-    -- TODO immediate failing write
+    , tryWriteChan
     , dupChan
     )
     where
@@ -23,7 +23,7 @@ import qualified Data.Primitive as P
 import Control.Monad
 import Control.Applicative
 import Data.Bits
-import Data.Maybe(fromMaybe)
+import Data.Maybe(fromMaybe,isJust)
 import Data.Typeable(Typeable)
 import GHC.Exts(inline)
 
@@ -31,7 +31,9 @@ import Utilities(nextHighestPowerOfTwo)
 
 
 -- | The write end of a channel created with 'newChan'.
-data InChan a = InChan !(Ticket (Cell a)) !(ChanEnd a)
+data InChan a = InChan (IO Int) -- readCounterReader, for tryWriteChan
+                       !(Ticket (Cell a)) 
+                       !(ChanEnd a)
     deriving Typeable
 
 -- | The read end of a channel created with 'newChan'.
@@ -39,7 +41,7 @@ newtype OutChan a = OutChan (ChanEnd a)
     deriving Typeable
 
 instance Eq (InChan a) where
-    (InChan _ (ChanEnd _ _ _ _ headA)) == (InChan _ (ChanEnd _ _ _ _ headB))
+    (InChan _ _ (ChanEnd _ _ _ _ headA)) == (InChan _ _ (ChanEnd _ _ _ _ headB))
         = headA == headB
 instance Eq (OutChan a) where
     (OutChan (ChanEnd _ _ _ _ headA)) == (OutChan (ChanEnd _ _ _ _ headB))
@@ -142,9 +144,11 @@ newChanStarting !startingCellOffset !sizeDirty = do
     let end = ChanEnd logBounds boundsMn1 segSource 
                   <$> newCounter (startingCellOffset - 1)
                   <*> newIORef (StreamHead startingCellOffset stream)
+    endR@(ChanEnd _ _ _ counterR _) <- end
+    endW <- end
     assert (size > 0 && (boundsMn1 + 1) == 2 ^ logBounds) $
-        liftA2 (,) (InChan savedEmptyTkt <$> end) 
-                   (OutChan <$> end)
+       return ( InChan (readCounter counterR) savedEmptyTkt endW
+              , OutChan endR )
 
 -- | Duplicate a chan: the returned @OutChan@ begins empty, but data written to
 -- the argument @InChan@ from then on will be available from both the original
@@ -154,7 +158,7 @@ newChanStarting !startingCellOffset !sizeDirty = do
 -- bounds; slower readers of duplicated 'OutChan' may fall arbitrarily behind.
 dupChan :: InChan a -> IO (OutChan a)
 {-# INLINE dupChan #-}
-dupChan (InChan _ (ChanEnd logBounds boundsMn1 segSource counter streamHead)) = do
+dupChan (InChan _ _ (ChanEnd logBounds boundsMn1 segSource counter streamHead)) = do
     hLoc <- readIORef streamHead
     loadLoadBarrier  -- NOTE [1]
     wCount <- readCounter counter
@@ -182,29 +186,65 @@ writeChan c = \a-> writeChanWithBlocking True c a
 
 writeChanWithBlocking :: Bool -> InChan a -> a -> IO ()
 {-# INLINE writeChanWithBlocking #-}
-writeChanWithBlocking canBlock (InChan savedEmptyTkt ce) a = mask_ $ do 
+writeChanWithBlocking canBlock (InChan _ savedEmptyTkt ce) a = mask_ $ do 
     (segIx, nextSeg, updateStreamHeadIfNecessary) <- moveToNextCell asWriter ce
-    let (seg, writerCheckinCont) = case nextSeg of
-          NextByWriter (Stream s _) checkpt -> (s, writerCheckin checkpt)
+    let (seg, maybeCheckpt) = case nextSeg of
+          NextByWriter (Stream s _) checkpt -> (s, Just checkpt)
           -- if installed by reader, no need to check in:
-          NextByReader (Stream s _)         -> (s, return ())
+          NextByReader (Stream s _)         -> (s, Nothing)
 
     (success,nonEmptyTkt) <- casArrayElem seg segIx savedEmptyTkt (Written a)
     if success
       -- NOTE: We must only block AFTER writing to be async exception-safe.
-      then when canBlock $ writerCheckinCont
+      -- TODO REFACTOR AND MOVE canBlock DEEPER
+      then maybe updateStreamHeadIfNecessary -- NOTE [2]
+                 ( \checkpt-> do
+                     unlocked <- if canBlock 
+                                   then True <$ writerCheckin checkpt
+                                   else tryWriterCheckin checkpt
+                     when unlocked $
+                       updateStreamHeadIfNecessary ) -- NOTE [1/2]
+                 maybeCheckpt
+                        
       -- If CAS failed then a reader beat us, so we know we're not out of
       -- bounds and don't need to writerCheckin
       else case peekTicket nonEmptyTkt of
-                Blocking v -> putMVar v a
+                Blocking v -> do putMVar v a
+                                 updateStreamHeadIfNecessary  -- NOTE [1] 
                 Empty      -> error "Stored Empty Ticket went stale!"
                 Written _  -> error "Nearly Impossible! Expected Blocking"
     
-    updateStreamHeadIfNecessary  -- NOTE [1] 
  -- [1] At this point we know that 'seg' is unlocked for writers because a
  -- reader unblocked us, so it's safe to update the StreamHead with this
  -- segment (if we moved to a new segment). This way we maintain the invariant
  -- that the StreamHead segment is always known "unlocked" to writers.
+ --
+ -- [2] Similarly when in tryWriteChan we only update the stream head when
+ -- we see that it was installed by reader, or we see that it was unlocked,
+ -- but for the latter we check without blocking.
+
+
+-- | Try to write a value to the channel, aborting if the write is likely to
+-- exceed the bounds, returning a @Bool@ indicating whether the write was
+-- successful.
+--
+-- This function never blocks, but may occasionally write successfully to a
+-- queue that is already "full". Unlike 'writeChan' this function treats the
+-- requested bounds (raised to nearest power of two) strictly, rather than
+-- using the @n .. n*2@ range. The more concurrent writes and reads that are
+-- happening, the more inaccurate the estimate of the chan's size is likely to
+-- be.
+tryWriteChan :: InChan a -> a -> IO Bool
+{-# INLINE tryWriteChan #-}
+tryWriteChan c@(InChan readCounterReader _ (ChanEnd _ boundsMn1 _ counter _)) = \a-> do
+    -- Similar caveats w/r/t counter overflow correctness as elsewhere apply
+    -- here: where this would lap and give incorrect results we have already
+    -- died with OOM:
+    ixR <- readCounterReader
+    ixW <- readCounter counter
+    if ixW - ixR > boundsMn1 
+        then return False
+        else writeChanWithBlocking False c a >> return True
 
 
 readChanOnExceptionUnmasked :: (IO a -> IO a) -> OutChan a -> IO a
@@ -404,3 +444,21 @@ writerCheckin (WriterCheckpoint v) = do
     -- make sure we can see the reader's segment creation once we unblock...
     loadLoadBarrier
     -- ... and proceed to readIORef the segment
+
+-- returns immediately indicating whether the checkpt is currently unblocked.
+tryWriterCheckin :: WriterCheckpoint -> IO Bool
+tryWriterCheckin (WriterCheckpoint v) = do
+-- On GHC > 7.8 we have an atomic `tryReadMVar`.  On earlier GHC readMVar is
+-- take+put, creating a race condition; in this case we use take+tryPut
+-- ensuring the MVar stays full even if a reader's tryPut slips an () in:
+    unblocked <- 
+#if __GLASGOW_HASKELL__ < 708
+      tryTakeMVar v >>= maybe (return False) ((True <$) . tryPutMVar v)
+#else
+      isJust <$> tryReadMVar v
+#endif
+    -- make sure we can see the reader's segment creation once we unblock...
+    loadLoadBarrier
+    return unblocked
+    -- ... and proceed to readIORef the segment
+

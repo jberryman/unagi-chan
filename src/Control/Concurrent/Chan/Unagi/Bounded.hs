@@ -21,6 +21,7 @@ module Control.Concurrent.Chan.Unagi.Bounded (
     , getChanContents
     -- ** Writing
     , writeChan
+    , tryWriteChan
     , writeList2Chan
     -- ** Broadcasting
     , dupChan

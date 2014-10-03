@@ -42,10 +42,15 @@ unagiBoundedMain = do
         testBoundsBlocking (2^n)
     putStrLn "OK"
     -- ------
-    putStrLn "==================="
+    putStr "Test behavior of tryWriteChan... "
+    forM_ [(1::Int),2,4,8] $ \n-> do
+        tryWriteChanSmoke (2^n)
+        tryWriteChanConcurrent (2^n)
+    putStrLn "OK"
+    -- ------
     putStrLn "Testing Unagi.Bounded components:"
     -- ------
-    putStr "Checkpoint tests... "
+    putStr "    Checkpoint tests... "
     checkpointTest1 100000000
     checkpointTest2 100000000
     putStrLn "OK"
@@ -70,7 +75,7 @@ overflowSanity segLen n = do
 -- bounds match up
 newChanSanity :: Int -> IO ()
 newChanSanity bnds = do
-    (UI.InChan _ inCE, UI.OutChan outCE) <- newChan bnds
+    (UI.InChan _ _ inCE, UI.OutChan outCE) <- newChan bnds
     check inCE
     check outCE
     checkSame inCE outCE
@@ -150,7 +155,7 @@ checkDeadlocksReaderUnagiBounded times = do
          finalRead <- readChan o `onException` ( putStrLn "Exception from final readChan!")
          
          oCnt <- readCounter $ (\(UI.OutChan(UI.ChanEnd _ _ _ cntr _))-> cntr) o
-         iCnt <- readCounter $ (\(UI.InChan _ (UI.ChanEnd _ _ _ cntr _))-> cntr) i
+         iCnt <- readCounter $ (\(UI.InChan _ _ (UI.ChanEnd _ _ _ cntr _))-> cntr) i
          unless (iCnt == numPreloaded + 1) $ 
             error "The InChan counter doesn't match what we'd expect from numPreloaded!"
 
@@ -188,7 +193,8 @@ checkpointTest1 :: Int -> IO ()
 checkpointTest1 n = do
     x <- newEmptyMVar
     checkpt <- UI.WriterCheckpoint <$> newEmptyMVar
-    void $ forkIO ((replicateM_ n $ UI.writerCheckin checkpt) >> putMVar x ())
+    -- check writerCheckin and tryWriterCheckin concurrently against idempotent unblockWriters
+    void $ forkIO ((replicateM_ n $ (UI.writerCheckin checkpt >> UI.tryWriterCheckin checkpt)) >> putMVar x ())
     threadDelay 10000
     replicateM_ n $ UI.unblockWriters checkpt
     takeMVar x `onException` putStrLn "checkpointTest1: Forked writerCheckin deadlocked!"
@@ -198,7 +204,8 @@ checkpointTest2 :: Int -> IO ()
 checkpointTest2 n = do
     x <- newEmptyMVar
     checkpt <- UI.WriterCheckpoint <$> newEmptyMVar
-    void $ forkIO ((replicateM_ n $ UI.writerCheckin checkpt) >> putMVar x ())
+    -- check writerCheckin and tryWriterCheckin concurrently against writerCheckin
+    void $ forkIO ((replicateM_ n $ (UI.writerCheckin checkpt >> UI.tryWriterCheckin checkpt)) >> putMVar x ())
     threadDelay 10000
     UI.unblockWriters checkpt
     replicateM_ n $ UI.writerCheckin checkpt
@@ -242,4 +249,112 @@ testBoundsBlocking bnds = do
     readChan outC
     takeMVar v2 `onException` putStrLn "Read should have unblocked bnds*2+1 writer"
 
-    
+
+{- OLD AND NO-LONGER RELEVANT
+-- A fork of the above, for tryWriteChan
+-- TODO these coule be more thoughtful/thorough
+testTryWriteChan :: Int -> IO ()
+testTryWriteChan bnds = do
+    (inC,outC) <- newChan bnds
+    -- make sure none of these block.
+    trues <- replicateM bnds $ tryWriteChan inC ()
+    unless (and trues) $
+        error "Some of the first writes failed!"
+    -- but this ought to fail:
+    success1 <- tryWriteChan inC () `onException` putStrLn "Our tryTakeMVar seems to have blocked instead of returning False!"
+    when success1 $
+        error "bnds+1 tryWriteChan should have failed!"
+    -- ...until we read:
+    readChan outC
+    -- then this should succeed:
+    success2 <- tryWriteChan inC () `onException` putStrLn "Our tryTakeMVar number 2 seems to have blocked instead of returning true!"
+    unless success2 $
+        error "bnds+1 tryWriteChan should have succeeded this time!"
+    --
+    -- Now we fork one which work together to fill remaining bnds-1 slots, without blocking:
+    successes2 <- replicateM (bnds-1) $ tryWriteChan inC ()
+        `onException` putStrLn "tryWrites should not have blocked in second segment"
+    unless (and successes2) $
+        error "failures seen in succcesses2!"
+    -- now we're at 2x bounds.
+    -- This next, again, should block:
+    success3 <- tryWriteChan inC () `onException` putStrLn "success3: Our tryTakeMVar seems to have blocked instead of returning False!"
+    when success3 $
+        error "bnds*2+1 tryWriteChan should have failed!"
+    -- and unblock as soon as (but no sooner than after bnds reads):
+    replicateM_ (bnds-1) $ readChan outC
+    success4 <- tryWriteChan inC () `onException` putStrLn "success4: Our tryTakeMVar seems to have blocked instead of returning False!"
+    when success4 $
+        error "bnds*2+1 writeChan should still have failed!"
+    -- now this should unblock:
+    readChan outC
+    success5 <- tryWriteChan inC () `onException` putStrLn "success5: Our tryTakeMVar seems to have blocked instead of returning False!"
+    unless success5 $
+        error "success5: should have succeeded!"
+
+    -- Now fork a couple writers and make sure none block:
+    vs <- replicateM 2 newEmptyMVar 
+    forM_ vs $ \v-> forkIO $ do
+        replicateM_ (5*bnds) $
+            tryWriteChan inC ()
+        putMVar v ()
+    forM_ vs $ \v-> 
+        takeMVar v `onException` putStrLn "A tryWriteChan seems to have blocked!"
+-}
+tryWriteChanSmoke :: Int -> IO ()
+tryWriteChanSmoke bnds = do
+    (inC,outC) <- newChan bnds
+    -- make sure none of these block.
+    trues <- replicateM bnds $ tryWriteChan inC ()
+    unless (and trues) $
+        error "Some of the first writes failed!"
+    -- but this ought to fail:
+    success1 <- tryWriteChan inC () `onException` putStrLn "Our tryTakeMVar seems to have blocked instead of returning False!"
+    when success1 $
+        error "bnds+1 tryWriteChan should have failed!"
+    -- ...until we read:
+    readChan outC
+    -- then this should succeed:
+    success2 <- tryWriteChan inC () `onException` putStrLn "Our tryTakeMVar number 2 seems to have blocked instead of returning true!"
+    unless success2 $
+        error "bnds+1 tryWriteChan should have succeeded this time!"
+    -- And the next should fail again.
+    success3 <- tryWriteChan inC () `onException` putStrLn "Our tryTakeMVar number 3 seems to have blocked instead of returning true!"
+    when success3 $
+        error "bnds+2 tryWriteChan should have failed!"
+    readChan outC
+    success4 <- tryWriteChan inC () `onException` putStrLn "Our tryTakeMVar number 4 seems to have blocked instead of returning true!"
+    unless success4 $
+        error "bnds+3 tryWriteChan should have succeeded this time!"
+
+-- Now do some concurrency tests, forking readers and writers that retry until
+-- they can fill their quota
+tryWriteChanConcurrent :: Int -> IO ()
+tryWriteChanConcurrent bnds = do
+    (inC,outC) <- newChan bnds
+    let n = 1000000
+        writer :: Int -> Int -> MVar Int -> IO ()
+        writer cnt failed v
+            | cnt > 0 = do
+                success <- tryWriteChan inC ()
+                if success 
+                    then writer (cnt-1) failed v
+                    else writer cnt (failed+1) v -- or yield here
+            | otherwise = putMVar v failed
+    v1 <- newEmptyMVar
+    -- Test with truly concurrent reader and writer:
+    void $ forkIO $ writer n 0 v1
+    replicateM_ n $ readChan outC
+    _failed0 <- takeMVar v1
+    -- print _failed0
+
+    -- And now with hopefully some concurrent writers:
+    v2 <- newEmptyMVar
+    void $ forkIO $ writer n 0 v1
+    void $ forkIO $ writer n 0 v2
+    void $ forkIO $ replicateM_ (n*2) $ readChan outC
+    _failed1 <- takeMVar v1
+    _failed2 <- takeMVar v2
+    -- print _failed1
+    -- print _failed2
+    return ()
