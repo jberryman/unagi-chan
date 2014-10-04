@@ -6,3 +6,4 @@
 ### 0.2
 
 - implement a bounded variant (See issue #1)
+- address issue with stale tickets when running in GHCi

@@ -414,7 +414,9 @@ type SegSource a = IO (StreamSegment a)
 
 newSegmentSource :: Int -> IO (SegSource a)
 newSegmentSource size = do
-    arr <- P.newArray size Empty
+    -- NOTE: evaluate Empty seems to be required here in order to not raise
+    -- "Stored Empty Ticket went stale!"  exception when in GHCi.
+    arr <- evaluate Empty >>= P.newArray size
     return (P.cloneMutableArray arr 0 size)
 
 
