@@ -320,14 +320,18 @@ moveToNextCell isReader (ChanEnd logBounds boundsMn1 segSource counter streamHea
         !segIx    = relIx .&. boundsMn1            -- `mod` bounds
         ~nEW_SEGMENT_WAIT = (boundsMn1 `div` 12) + 25 
     
-        {-# INLINE go #-}
         go  0 nextSeg = return nextSeg
         go !n nextSeg =
             waitingAdvanceStream isReader (getNextRef nextSeg) segSource (nEW_SEGMENT_WAIT*segIx) -- NOTE [1]
               >>= go (n-1)
  
     nextSeg <- assert (relIx >= 0) $
-                 go segsAway $ NextByReader str0  -- NOTE [2]
+              -- go segsAway $ NextByReader str0  -- NOTE [2]
+                 -- NOTE: this is redundant, since `go` doesn't want to get
+                 -- inlined/unrolled
+                 if segsAway == 0 
+                     then return      $ NextByReader str0 
+                     else go segsAway $ NextByReader str0  -- NOTE [2]
 
     -- writers and readers must perform this continuation at different points:
     let updateStreamHeadIfNecessary = 
