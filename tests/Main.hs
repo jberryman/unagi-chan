@@ -34,7 +34,6 @@ main = do
     hSetBuffering stdout NoBuffering
 
     -- -----------------------------------
-
     -- test important properties of our atomic-primops:
     atomicsMain
 
@@ -49,7 +48,9 @@ main = do
     -- check for deadlocks:
     deadlocksMain
 
-    -- unagi-specific tests
+    -- implementation-specific tests
     unagiMain
     unagiUnboxedMain
     unagiBoundedMain
+
+    putStrLn "ALL DONE!"
