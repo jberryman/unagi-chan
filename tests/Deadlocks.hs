@@ -6,6 +6,7 @@ import Control.Exception
 import Control.Monad
 
 import Implementations
+import qualified Control.Concurrent.Chan.Unagi.Bounded as UB
 
 
 deadlocksMain :: IO ()
@@ -44,8 +45,7 @@ deadlocksMain = do
     -- ------
     putStr $ "    Checking for deadlocks from killed writer, x"++show tries++"... "
     -- fragile bounds must be large enought to never be reached here:
-    checkDeadlocksWriter (unagiBoundedImpl (2^(17::Int))) tries
-        `onException` putStrLn "NOTE: probably a test issue, not a bug, but please report."
+    checkDeadlocksWriterBounded tries
     putStrLn "OK"
 
 
@@ -114,3 +114,31 @@ checkDeadlocksWriter (newChan,writeChan,readChan,_) n = void $
          z <- readChan o
          unless (z == 0) $
             error "Writer never got a chance to write!"
+
+-- A bit ugly, but we need this slight variant for Bounded variant:
+checkDeadlocksWriterBounded :: Int -> IO ()
+checkDeadlocksWriterBounded cnt = go 0 cnt where
+  go lates n 
+    | lates > (cnt `div` 4) = error "This is taking too long; we probably need a bigger bounds, sorry." 
+    | otherwise = 
+       when (n > 0) $ do
+         (i,o) <- UB.newChan (2^14)
+         wStart <- newEmptyMVar
+         wid <- forkIO (putMVar wStart () >> ( forever $ UB.writeChan i (0::Int)) )
+         -- wait for writer to start
+         takeMVar wStart >> threadDelay 1
+         throwTo wid ThreadKilled
+         -- did killing the writer damage queue for writes or reads?
+         success <- UB.tryWriteChan i (1::Int)
+         if success
+             then do
+                 z <- UB.readChan o
+                 if (z /= 0)
+                    -- Writer never got a chance to write, retry:
+                    then go (lates+1) n
+                    -- OK:
+                    else go lates (n-1)
+
+             -- throwTo probably didn't catch writeChan while running, retry:
+             else go (lates+1) n
+
