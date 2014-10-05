@@ -41,6 +41,7 @@ main = do
         [ bench "unagi-chan Unagi" $ nfIO (U.writeChan fastEmptyUI () >> U.readChan fastEmptyUO)
         , bench "unagi-chan Unagi.Unboxed" $ nfIO (UU.writeChan fastEmptyUUI (0::Int) >> UU.readChan fastEmptyUUO) -- TODO comparing Int writing to (). Change?
         , bench "unagi-chan Unagi.Bounded 1024" $ nfIO (UB.writeChan fastEmptyUBI (0::Int) >> UB.readChan fastEmptyUBO) -- TODO comparing Int writing to (). Change?
+        , bench "unagi-chan Unagi.Bounded 1024 with tryWriteChan" $ nfIO (UB.tryWriteChan fastEmptyUBI (0::Int) >> UB.readChan fastEmptyUBO) -- TODO comparing Int writing to (). Change?
 #ifdef COMPARE_BENCHMARKS
         , bench "Chan" (writeChan chanEmpty () >> readChan chanEmpty)
         , bench "TQueue" (atomically (writeTQueue tqueueEmpty () >>  readTQueue tqueueEmpty))

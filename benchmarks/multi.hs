@@ -3,13 +3,13 @@ module Main where
 
 import qualified Control.Concurrent.Chan.Unagi as U
 import qualified Control.Concurrent.Chan.Unagi.Unboxed as UU
+import qualified Control.Concurrent.Chan.Unagi.Bounded as UB
 #ifdef COMPARE_BENCHMARKS
 import Control.Concurrent.Chan
 import Control.Concurrent.STM
 --import qualified Data.Concurrent.Queue.MichaelScott as MS
 #endif
 
-import Control.Concurrent.MVar
 import Control.Concurrent.Async
 import Control.Monad
 import Criterion.Main
@@ -34,15 +34,6 @@ main = do
 
   putStrLn $ "Running with capabilities: "++(show procs)
 
-  (fill_empty_fastUI, fill_empty_fastUO) <- U.newChan
-  (fill_empty_fastUUI, fill_empty_fastUUO) <- UU.newChan -- TODO WHY IS THIS COMPILING BELOW???
-#ifdef COMPARE_BENCHMARKS
-  fill_empty_chan <- newChan
-  fill_empty_tqueue <- newTQueueIO
-  --fill_empty_tbqueue <- newTBQueueIO maxBound
-  --fill_empty_lockfree <- MS.newQ
-#endif
-
   defaultMain $
     [ bgroup ("Operations on "++(show n)++" messages") $
         [ bgroup "unagi-chan Unagi" $
@@ -56,92 +47,37 @@ main = do
               -- all of the above; this is probably less than
               -- informative. Try threadscope on a standalone test:
               , bench "oversubscribing: async 100 writers 100 readers" $ nfIO $ asyncReadsWritesUnagi 100 100 n
-              -- NOTE: this is a bit hackish, filling in one test and
-              -- reading in the other; make sure memory usage isn't
-              -- influencing mean:
-              -- This measures writer/writer contention:
-              , bench ("async "++(show procs)++" writers") $ nfIO $ do
-                  dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
-                  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (U.writeChan fill_empty_fastUI ()) >> putMVar done1 ()) $ zip starts dones
-                  mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
-              -- This measures reader/reader contention:
-              , bench ("async "++(show procs)++" readers") $ nfIO $ do
-                  dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
-                  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (U.readChan fill_empty_fastUO) >> putMVar done1 ()) $ zip starts dones
-                  mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
-
               , bench "async Int writer, main thread read and sum" $ nfIO $ asyncSumIntUnagi n
               ]
         , bgroup "unagi-chan Unagi.Unboxed" $
               [ bench "async 1 writers 1 readers" $ nfIO $ asyncReadsWritesUnagiUnboxed 1 1 n
               , bench "oversubscribing: async 100 writers 100 readers" $ nfIO $ asyncReadsWritesUnagiUnboxed 100 100 n
-              -- TODO using Ints here instead of (); change others so we can properly compare?
-              , bench ("async "++(show procs)++" writers") $ nfIO $ do
-                  dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
-                  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (UU.writeChan fill_empty_fastUUI (0::Int)) >> putMVar done1 ()) $ zip starts dones
-                  mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
-              , bench ("async "++(show procs)++" readers") $ nfIO $ do
-                  dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
-                  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (UU.readChan fill_empty_fastUUO) >> putMVar done1 ()) $ zip starts dones
-                  mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
-
               , bench "async Int writer, main thread read and sum" $ nfIO $ asyncSumIntUnagiUnboxed n
+              ]
+        , bgroup "unagi-chan Unagi.Bounded" $
+              [ bench "async 1 writers 1 readers" $ nfIO $ asyncReadsWritesUnagiBounded 4096 1 1 n   -- TODO with different bounds, here and below
+              , bench "oversubscribing: async 100 writers 100 readers" $ nfIO $ asyncReadsWritesUnagiBounded 4096 100 100 n
+              , bench "async Int writer, main thread read and sum" $ nfIO $ asyncSumIntUnagiBounded 4096 n -- TODO with different bounds
               ]
 #ifdef COMPARE_BENCHMARKS
         , bgroup "Chan" $
               [ bench "async 1 writer 1 readers" $ asyncReadsWritesChan 1 1 n
               , bench "oversubscribing: async 100 writers 100 readers" $ asyncReadsWritesChan 100 100 n
-              , bench ("async "++(show procs)++" writers") $ do
-                  dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
-                  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (writeChan fill_empty_chan ()) >> putMVar done1 ()) $ zip starts dones
-                  mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
-              -- This measures reader/reader contention:
-              , bench ("async "++(show procs)++" readers") $ do
-                  dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
-                  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (readChan fill_empty_chan) >> putMVar done1 ()) $ zip starts dones
-                  mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
               ]
         , bgroup "TQueue" $
               [ bench "async 1 writers 1 readers" $ asyncReadsWritesTQueue 1 1 n
               , bench "oversubscribing: async 100 writers 100 readers" $ asyncReadsWritesTQueue 100 100 n
-              -- This measures writer/writer contention:
-              , bench ("async "++(show procs)++" writers") $ do
-                  dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
-                  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (atomically $ writeTQueue fill_empty_tqueue ()) >> putMVar done1 ()) $ zip starts dones
-                  mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
-              -- This measures reader/reader contention:
-              , bench ("async "++(show procs)++" readers") $ do
-                  dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
-                  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (atomically $ readTQueue fill_empty_tqueue) >> putMVar done1 ()) $ zip starts dones
-                  mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
               ]
         {-
         , bgroup "TBQueue" $
               [ bench "async 1 writers 1 readers" $ asyncReadsWritesTBQueue 1 1 n
               , bench "oversubscribing: async 100 writers 100 readers" $ asyncReadsWritesTBQueue 100 100 n
               -- This measures writer/writer contention:
-              , bench ("async "++(show procs)++" writers") $ do
-                  dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
-                  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (atomically $ writeTBQueue fill_empty_tbqueue ()) >> putMVar done1 ()) $ zip starts dones
-                  mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
-              -- This measures reader/reader contention:
-              , bench ("async "++(show procs)++" readers") $ do
-                  dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
-                  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (atomically $ readTBQueue fill_empty_tbqueue) >> putMVar done1 ()) $ zip starts dones
-                  mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
               ]
         -- michael-scott queue implementation, using atomic-primops
         , bgroup "lockfree-queue" $
               [ bench "async 1 writer 1 readers" $ asyncReadsWritesLockfree 1 1 n
               , bench "oversubscribing: async 100 writers 100 readers" $ asyncReadsWritesLockfree 100 100 n
-              , bench ("async "++(show procs)++" writers") $ do
-                  dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
-                  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (MS.pushL fill_empty_lockfree ()) >> putMVar done1 ()) $ zip starts dones
-                  mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
-              , bench ("async "++(show procs)++" readers") $ do
-                  dones <- replicateM procs newEmptyMVar ; starts <- replicateM procs newEmptyMVar
-                  mapM_ (\(start1,done1)-> forkIO $ takeMVar start1 >> replicateM_ (n `div` procs) (msreadR fill_empty_lockfree) >> putMVar done1 ()) $ zip starts dones
-                  mapM_ (\v-> putMVar v ()) starts ; mapM_ (\v-> takeMVar v) dones
               ]
          -}
 #endif
@@ -156,6 +92,8 @@ main = do
                 map (\c-> benchRun c $ asyncReadsWritesUnagi c c n) runs
             , bgroup "Unagi.Unboxed" $
                 map (\c-> benchRun c $ asyncReadsWritesUnagiUnboxed c c n) runs
+            , bgroup "Unagi.Bounded (4096)" $
+                map (\c-> benchRun c $ asyncReadsWritesBounded 4096 c c n) runs -- TODO with different bounds.
             , bgroup "TQueue       " $
                 map (\c-> benchRun c $ asyncReadsWritesTQueue c c n) runs
             , bgroup "Chan         " $
@@ -203,6 +141,25 @@ asyncSumIntUnagiUnboxed n = do
    let readerSum  0  !tot = return tot
        readerSum !n' !tot = UU.readChan o >>= readerSum (n'-1) . (tot+)
    _ <- async $ mapM_ (UU.writeChan i) [1..n] -- NOTE: partially-applied writeChan
+   readerSum n 0
+
+
+-- Bounded Unagi:
+-- NOTE: using Int here instead of (). TODO change others so we can properly compare?
+asyncReadsWritesUnagiBounded :: Int -> Int -> Int -> Int -> IO ()
+asyncReadsWritesUnagiBounded bnds writers readers n = do
+  let nNice = n - rem n (lcm writers readers)
+  (i,o) <- UB.newChan bnds
+  rcvrs <- replicateM readers $ async $ replicateM_ (nNice `quot` readers) $ UB.readChan o
+  _ <- replicateM writers $ async $ replicateM_ (nNice `quot` writers) $ UB.writeChan i (0::Int)
+  mapM_ wait rcvrs
+
+asyncSumIntUnagiBounded :: Int -> Int -> IO Int
+asyncSumIntUnagiBounded bnds n = do
+   (i,o) <- UB.newChan bnds
+   let readerSum  0  !tot = return tot
+       readerSum !n' !tot = UB.readChan o >>= readerSum (n'-1) . (tot+)
+   _ <- async $ mapM_ (UB.writeChan i) [1..n] -- NOTE: partially-applied writeChan
    readerSum n 0
 
 
