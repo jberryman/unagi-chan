@@ -122,7 +122,7 @@ checkDeadlocksWriterBounded cnt = go 0 cnt where
     | lates > (cnt `div` 4) = error "This is taking too long; we probably need a bigger bounds, sorry." 
     | otherwise = 
        when (n > 0) $ do
-         (i,o) <- UB.newChan (2^14)
+         (i,o) <- UB.newChan (2^(14::Int))
          wStart <- newEmptyMVar
          wid <- forkIO (putMVar wStart () >> ( forever $ UB.writeChan i (0::Int)) )
          -- wait for writer to start
