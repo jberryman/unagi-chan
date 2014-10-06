@@ -23,7 +23,7 @@ import qualified Data.Primitive as P
 import Control.Monad
 import Control.Applicative
 import Data.Bits
-import Data.Maybe(fromMaybe,isJust)
+import Data.Maybe(fromMaybe)
 import Data.Typeable(Typeable)
 import GHC.Exts(inline)
 
@@ -196,7 +196,6 @@ writeChanWithBlocking canBlock (InChan _ savedEmptyTkt ce) a = mask_ $ do
     (success,nonEmptyTkt) <- casArrayElem seg segIx savedEmptyTkt (Written a)
     if success
       -- NOTE: We must only block AFTER writing to be async exception-safe.
-      -- TODO REFACTOR AND MOVE canBlock DEEPER
       then maybe updateStreamHeadIfNecessary -- NOTE [2]
                  ( \checkpt-> do
                      unlocked <- if canBlock 
@@ -213,7 +212,6 @@ writeChanWithBlocking canBlock (InChan _ savedEmptyTkt ce) a = mask_ $ do
                                  updateStreamHeadIfNecessary  -- NOTE [1] 
                 Empty      -> error "Stored Empty Ticket went stale!"
                 Written _  -> error "Nearly Impossible! Expected Blocking"
-    
  -- [1] At this point we know that 'seg' is unlocked for writers because a
  -- reader unblocked us, so it's safe to update the StreamHead with this
  -- segment (if we moved to a new segment). This way we maintain the invariant
@@ -222,6 +220,7 @@ writeChanWithBlocking canBlock (InChan _ savedEmptyTkt ce) a = mask_ $ do
  -- [2] Similarly when in tryWriteChan we only update the stream head when
  -- we see that it was installed by reader, or we see that it was unlocked,
  -- but for the latter we check without blocking.
+
 
 
 -- | Try to write a value to the channel, aborting if the write is likely to
@@ -461,7 +460,11 @@ tryWriterCheckin (WriterCheckpoint v) = do
 #if __GLASGOW_HASKELL__ < 708
       tryTakeMVar v >>= maybe (return False) ((True <$) . tryPutMVar v)
 #else
-      isJust <$> tryReadMVar v
+      tryTakeMVar v >>= maybe (return False) ((True <$) . tryPutMVar v)
+      -- This is what we really want, unfortunately (and unfortunately for the
+      -- hours of my life I'll never get back) this is buggy in GHC < 7.8.3:
+      --   https://ghc.haskell.org/trac/ghc/ticket/9148
+    --isJust <$> tryReadMVar v
 #endif
     -- make sure we can see the reader's segment creation once we unblock...
     loadLoadBarrier
