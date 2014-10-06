@@ -61,12 +61,12 @@ main = do
               ]
 #ifdef COMPARE_BENCHMARKS
         , bgroup "Chan" $
-              [ bench "async 1 writer 1 readers" $ asyncReadsWritesChan 1 1 n
-              , bench "oversubscribing: async 100 writers 100 readers" $ asyncReadsWritesChan 100 100 n
+              [ bench "async 1 writer 1 readers" $ nfIO $ asyncReadsWritesChan 1 1 n
+              , bench "oversubscribing: async 100 writers 100 readers" $ nfIO $ asyncReadsWritesChan 100 100 n
               ]
         , bgroup "TQueue" $
-              [ bench "async 1 writers 1 readers" $ asyncReadsWritesTQueue 1 1 n
-              , bench "oversubscribing: async 100 writers 100 readers" $ asyncReadsWritesTQueue 100 100 n
+              [ bench "async 1 writers 1 readers" $ nfIO $ asyncReadsWritesTQueue 1 1 n
+              , bench "oversubscribing: async 100 writers 100 readers" $ nfIO $ asyncReadsWritesTQueue 100 100 n
               ]
         {-
         , bgroup "TBQueue" $
@@ -87,13 +87,13 @@ main = do
     -- the haddocks to demo performance
     , bgroup ("Demo with messages x"++show n) $
         let runs = [1..procs_div2]
-            benchRun c = bench ("with "++(show c)++ "readers and "++(show c)++" writers")
+            benchRun c = bench ("with "++(show c)++ " readers and "++(show c)++" writers") . nfIO
          in [ bgroup "Unagi        " $
                 map (\c-> benchRun c $ asyncReadsWritesUnagi c c n) runs
             , bgroup "Unagi.Unboxed" $
                 map (\c-> benchRun c $ asyncReadsWritesUnagiUnboxed c c n) runs
             , bgroup "Unagi.Bounded (4096)" $
-                map (\c-> benchRun c $ asyncReadsWritesBounded 4096 c c n) runs -- TODO with different bounds.
+                map (\c-> benchRun c $ asyncReadsWritesUnagiBounded 4096 c c n) runs -- TODO with different bounds.
             , bgroup "TQueue       " $
                 map (\c-> benchRun c $ asyncReadsWritesTQueue c c n) runs
             , bgroup "Chan         " $

@@ -43,8 +43,8 @@ main = do
         , bench "unagi-chan Unagi.Bounded 1024" $ nfIO (UB.writeChan fastEmptyUBI (0::Int) >> UB.readChan fastEmptyUBO) -- TODO comparing Int writing to (). Change?
         , bench "unagi-chan Unagi.Bounded 1024 with tryWriteChan" $ nfIO (UB.tryWriteChan fastEmptyUBI (0::Int) >> UB.readChan fastEmptyUBO) -- TODO comparing Int writing to (). Change?
 #ifdef COMPARE_BENCHMARKS
-        , bench "Chan" (writeChan chanEmpty () >> readChan chanEmpty)
-        , bench "TQueue" (atomically (writeTQueue tqueueEmpty () >>  readTQueue tqueueEmpty))
+        , bench "Chan" $ nfIO $ (writeChan chanEmpty () >> readChan chanEmpty)
+        , bench "TQueue" $ nfIO $ (atomically (writeTQueue tqueueEmpty () >>  readTQueue tqueueEmpty))
         {-
         -- TODO when comparing our bounded queues:
         , bench "TBQueue" (atomically (writeTBQueue tbqueueEmpty () >>  readTBQueue tbqueueEmpty))
@@ -59,8 +59,8 @@ main = do
               , bench "unagi-chan Unagi.Unboxed" $ nfIO $ runtestSplitChanUU1 n
               , bench "unagi-chan Unagi.Bounded" $ nfIO $ runtestSplitChanUB1 n
 #ifdef COMPARE_BENCHMARKS
-              , bench "Chan" $ runtestChan1 n
-              , bench "TQueue" $ runtestTQueue1 n
+              , bench "Chan" $ nfIO $ runtestChan1 n
+              , bench "TQueue" $ nfIO $ runtestTQueue1 n
            -- , bench "TBQueue" $ runtestTBQueue1 n
            -- , bench "lockfree-queue" $ runtestLockfreeQueue1 n
 #endif
@@ -70,8 +70,8 @@ main = do
               , bench "unagi-chan Unagi.Unboxed" $ nfIO $ runtestSplitChanUU2 n
               , bench "unagi-chan Unagi.Bounded" $ nfIO $ runtestSplitChanUB2 n
 #ifdef COMPARE_BENCHMARKS
-              , bench "Chan" $ runtestChan2 n
-              , bench "TQueue" $ runtestTQueue2 n
+              , bench "Chan" $ nfIO $ runtestChan2 n
+              , bench "TQueue" $ nfIO $ runtestTQueue2 n
            -- , bench "TBQueue" $ runtestTBQueue2 n
            -- , bench "lockfree-queue" $ runtestLockfreeQueue2 n
 #endif
