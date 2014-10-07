@@ -13,13 +13,10 @@ description:
     Here is an example benchmark measuring the time taken to concurrently write
     and read 100,000 messages, with work divided amongst increasing number of
     readers and writers, comparing against the top-performing queues in the
-    standard libraries. Scale is milliseconds.
+    standard libraries, with an inset graph showing a zoomed-in view on the
+    implementations here.
     .
-    <<http://i.imgur.com/safKkCP.png>>
-    .
-    And here is a view on just the unagi implementations.
-    .
-    <<http://i.imgur.com/K6s2pXj.png>>
+    <<http://i.imgur.com/J5rLUFn.png>>
     .
     
 license:             BSD3
@@ -32,6 +29,7 @@ cabal-version:       >=1.10
 -- currently uploaded to imgur; move to this eventually
 --extra-doc-files:     images/*.png
 --cabal-version:       >=1.18
+extra-source-files: CHANGELOG.markdown
 
 source-repository head   
     type:     git
@@ -42,9 +40,11 @@ library
   hs-source-dirs:      src
   exposed-modules:     Control.Concurrent.Chan.Unagi
                      , Control.Concurrent.Chan.Unagi.Unboxed
+                     , Control.Concurrent.Chan.Unagi.Bounded
 
   other-modules:       Control.Concurrent.Chan.Unagi.Internal
                      , Control.Concurrent.Chan.Unagi.Unboxed.Internal
+                     , Control.Concurrent.Chan.Unagi.Bounded.Internal
                      , Control.Concurrent.Chan.Unagi.Constants
                      , Utilities
                      , Data.Atomics.Counter.Fat
@@ -61,14 +61,11 @@ library
   if !arch(i386) && !arch(x86_64)
     cpp-options: -DNOT_x86
 
-  extra-source-files: CHANGELOG.markdown
   
 -- TODO
 --  - Do a benchmark of multiple queues running in parallel, to see if we are
 --     affected by global allocator issues with pinned memory:
 --     http://thread.gmane.org/gmane.comp.lang.haskell.parallel/218
---  - On next benchmarks run, cut out "Demo with messages..with" and make unagi 
---     view overlayed with drop shadow
 --
 -- Potential implementations roadmap (or we might just stick with this design
 -- for this package):
@@ -97,7 +94,6 @@ test-suite test
   main-is: Main.hs
   other-modules:
       Atomics
-    , Chan003
     , Deadlocks
     , DupChan
     , Implementations

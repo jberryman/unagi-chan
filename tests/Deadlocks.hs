@@ -6,12 +6,13 @@ import Control.Exception
 import Control.Monad
 
 import Implementations
+import qualified Control.Concurrent.Chan.Unagi.Bounded as UB
 
 
 deadlocksMain :: IO ()
 deadlocksMain = do
-    let tries = 50000
-    
+    let tries = 10000
+
     putStrLn "==================="
     putStrLn "Testing Unagi:"
     -- ------
@@ -34,6 +35,18 @@ deadlocksMain = do
     checkDeadlocksWriter unboxedUnagiImpl tries
     putStrLn "OK"
 
+    putStrLn "==================="
+    putStrLn "Testing Unagi.Bounded:"
+    -- ------
+    putStr $ "    Checking for deadlocks from killed reader, x"++show tries++"... "
+    -- bounds must be > 10000 here (note actual bounds rounded up to power of 2):
+    checkDeadlocksReader (unagiBoundedImpl 50000) tries
+    putStrLn "OK"
+    -- ------
+    putStr $ "    Checking for deadlocks from killed writer, x"++show tries++"... "
+    -- fragile bounds must be large enought to never be reached here:
+    checkDeadlocksWriterBounded tries
+    putStrLn "OK"
 
 
 -- -- Chan002.hs -- --
@@ -49,7 +62,7 @@ checkDeadlocksReader (newChan,writeChan,readChan,_) times = do
   procs <- getNumCapabilities
   let run _       0 = putStrLn ""
       run retries n = do
-         when (retries > (times `div` 5)) $
+         when (retries > (times `div` 3)) $
             error "This test is taking too long. Please retry, and if still failing send the log to me"
          (i,o) <- newChan
          -- if we don't have at least three cores, then we need to write enough messages in first, before killing reader.
@@ -59,7 +72,7 @@ checkDeadlocksReader (newChan,writeChan,readChan,_) times = do
                                 takeMVar wStart >> threadDelay 1 -- wait until we're writing
                                 return $ Just wid
                              
-                        else do replicateM_ 10000 $ writeChan i (0::Int)
+                        else do replicateM_ 15000 $ writeChan i (0::Int)
                                 return Nothing
          rStart <- newEmptyMVar
          rid <- forkIO $ (putMVar rStart () >> (forever $ void $ readChan o))
@@ -101,3 +114,31 @@ checkDeadlocksWriter (newChan,writeChan,readChan,_) n = void $
          z <- readChan o
          unless (z == 0) $
             error "Writer never got a chance to write!"
+
+-- A bit ugly, but we need this slight variant for Bounded variant:
+checkDeadlocksWriterBounded :: Int -> IO ()
+checkDeadlocksWriterBounded cnt = go 0 cnt where
+  go lates n 
+    | lates > (cnt `div` 4) = error "This is taking too long; we probably need a bigger bounds, sorry." 
+    | otherwise = 
+       when (n > 0) $ do
+         (i,o) <- UB.newChan (2^(14::Int))
+         wStart <- newEmptyMVar
+         wid <- forkIO (putMVar wStart () >> ( forever $ UB.writeChan i (0::Int)) )
+         -- wait for writer to start
+         takeMVar wStart >> threadDelay 1
+         throwTo wid ThreadKilled
+         -- did killing the writer damage queue for writes or reads?
+         success <- UB.tryWriteChan i (1::Int)
+         if success
+             then do
+                 z <- UB.readChan o
+                 if (z /= 0)
+                    -- Writer never got a chance to write, retry:
+                    then go (lates+1) n
+                    -- OK:
+                    else go lates (n-1)
+
+             -- throwTo probably didn't catch writeChan while running, retry:
+             else go (lates+1) n
+

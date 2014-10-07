@@ -13,6 +13,7 @@ import DupChan
 -- implementation-specific tests:
 import Unagi
 import UnagiUnboxed
+import UnagiBounded
 
 -- Other
 import Atomics
@@ -20,6 +21,7 @@ import IndexedMVar
 
 main :: IO ()
 main = do 
+    -- Make sure testing environment is sane:
     assertionsWorking <- try $ assert False $ return ()
     case assertionsWorking of
          Left (AssertionFailed _) -> putStrLn "Assertions: On"
@@ -32,7 +34,6 @@ main = do
     hSetBuffering stdout NoBuffering
 
     -- -----------------------------------
-
     -- test important properties of our atomic-primops:
     atomicsMain
 
@@ -47,6 +48,9 @@ main = do
     -- check for deadlocks:
     deadlocksMain
 
-    -- unagi-specific tests
+    -- implementation-specific tests
     unagiMain
     unagiUnboxedMain
+    unagiBoundedMain
+
+    putStrLn "ALL DONE!"

@@ -34,10 +34,6 @@ sEGMENT_LENGTH = 1024 -- NOTE: THIS MUST REMAIN A POWER OF 2!
 nEW_SEGMENT_WAIT :: Int
 nEW_SEGMENT_WAIT = round (((14.6::Float) + 0.3*fromIntegral sEGMENT_LENGTH) / 3.7) + 10
 
--- TODO move these into a Constants INLINABLE file, 
---      use in Unboxed as well
---      verify by running a benchmark on consts3
-
 lOG_SEGMENT_LENGTH :: Int
 lOG_SEGMENT_LENGTH = 
     let x = 10  -- ...pre-computed from...

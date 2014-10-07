@@ -2,6 +2,7 @@ module Implementations where
 
 import qualified Control.Concurrent.Chan.Unagi as U
 import qualified Control.Concurrent.Chan.Unagi.Unboxed as UU
+import qualified Control.Concurrent.Chan.Unagi.Bounded as UB
 import qualified Data.Primitive as P
 
 type Implementation inc outc a = (IO (inc a, outc a), inc a -> a -> IO (), outc a -> IO a, inc a -> IO (outc a))
@@ -12,3 +13,5 @@ unagiImpl =  (U.newChan, U.writeChan, U.readChan, U.dupChan)
 unboxedUnagiImpl :: (P.Prim a)=> Implementation UU.InChan UU.OutChan a
 unboxedUnagiImpl = (UU.newChan, UU.writeChan, UU.readChan, UU.dupChan)
 
+unagiBoundedImpl :: Int -> Implementation UB.InChan UB.OutChan a
+unagiBoundedImpl n =  (UB.newChan n, UB.writeChan, UB.readChan, UB.dupChan)

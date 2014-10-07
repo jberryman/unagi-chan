@@ -2,14 +2,25 @@
 module Smoke (smokeMain) where
 
 import Control.Monad
-import Control.Concurrent(forkIO)
+import Control.Concurrent(forkIO,threadDelay)
 import qualified Control.Concurrent.Chan as C
 import Data.List
+import Control.Exception
+import qualified Control.Exception as E
 
 import Implementations
 
+-- TODO This is real lame, probably just use async
+lgErrs :: Bool -> String -> IO () -> IO ()
+lgErrs expectingBlock nm = E.handle $ \e-> 
+    let lg = putStrLn $ "!!! EXCEPTION IN "++nm++": "++(show e) 
+    in case E.fromException e of
+            Just BlockedIndefinitelyOnMVar -> when (not expectingBlock) lg
+            Nothing -> lg
+    
+
 smokeMain :: IO ()
-smokeMain = do
+smokeMain = (do
     putStrLn "==================="
     putStrLn "Testing Unagi:"
     -- ------
@@ -18,6 +29,7 @@ smokeMain = do
     putStrLn "OK"
     -- ------
     testContention unagiImpl 2 2 1000000
+
 
     putStrLn "==================="
     putStrLn "Testing Unagi.Unboxed:"
@@ -29,10 +41,23 @@ smokeMain = do
     testContention unboxedUnagiImpl 2 2 1000000
 
 
+    forM_ [1, 2, 4, 1024] $ \bounds-> do
+        putStrLn "==================="
+        putStrLn $ "Testing Unagi.Bounded with bounds "++(show bounds)
+        -- ------
+        putStr "    FIFO smoke test... "
+        fifoSmoke (unagiBoundedImpl bounds) 100000
+        putStrLn "OK"
+        -- ------
+        testContention (unagiBoundedImpl bounds) 2 2 1000000
+
+    ) `onException` (threadDelay 1000000) -- wait for lgErrs
+
 fifoSmoke :: Implementation inc outc Int -> Int -> IO ()
 fifoSmoke (newChan,writeChan,readChan,_) n = do
     (i,o) <- newChan
-    mapM_ (writeChan i) [1..n]
+    -- we need to fork this for Unagi.Bounded:
+    void $ forkIO $ lgErrs False "fifoSmoke writeChan " $ mapM_ (writeChan i) [1..n]
     nsOut <- replicateM n $ readChan o
     unless (nsOut == [1..n]) $
         error "Cough!"
@@ -47,19 +72,19 @@ testContention (newChan,writeChan,readChan,_) writers readers n = do
 
   (i,o) <- newChan
   -- some will get blocked indefinitely:
-  void $ replicateM readers $ forkIO $ forever $
+  void $ replicateM readers $ forkIO $ lgErrs True "testContention readChan o"$ forever $
       readChan o >>= C.writeChan out
   
-  putStrLn $ "Sending "++(show $ length $ concat groups)++" messages, with "++(show readers)++" readers and "++(show writers)++" writers."
-  mapM_ (forkIO . mapM_ (writeChan i)) groups
+  putStr $ "    Sending "++(show $ length $ concat groups)++" messages, with "++(show readers)++" readers and "++(show writers)++" writers.... "
+  mapM_ (forkIO . lgErrs False "testContention writeChan i " . mapM_ (writeChan i)) groups
 
   ns <- replicateM nNice (C.readChan out)
   isEmpty <- C.isEmptyChan out
   if sort ns == [1..nNice] && isEmpty
       then let d = interleaving ns
-            in if d < 0.75
-                 then putStrLn $ "Not enough interleaving of threads: "++(show $ d)++". Please try again or report a bug"
-                 else putStrLn $ "Success, with interleaving pct of "++(show $ d)++" (closer to 1 means we have higher confidence in the test)."
+            in if d < 0.7 -- arbitrary
+                 then putStrLn $ "OK, BUT WARNING: low interleaving of threads: "++(show $ d)
+                 else putStrLn $ "OK" --, with interleaving pct of "++(show $ d)++" (closer to 1 means we have higher confidence in the test)."
       else error "What we put in isn't what we got out :("
 
 -- --------- Helpers:

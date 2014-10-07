@@ -33,6 +33,19 @@ dupChanMain = do
     replicateM_ 1000 $ dupChanTest2 unboxedUnagiImpl 10000
     putStrLn "OK"
 
+    putStrLn "==================="
+    putStrLn "Test dupChan Unagi.Bounded"
+    -- NOTE: n must be <= bounds in dupChanTest1:
+    forM_ [(4096,4096),(65536,50000),(4,2)] $ \(bounds, n)-> do
+        -- ------
+        putStr $ "    Reader/Reader with bounds "++(show bounds)++"... "
+        replicateM_ 1000 $ dupChanTest1 (unagiBoundedImpl bounds) n
+        putStrLn "OK"
+    forM_ [2, 1024, 65536] $ \bounds-> do
+        putStr $ "    Writer/dupChan+Reader with bounds "++(show bounds)++"... "
+        replicateM_ 1000 $ dupChanTest2 (unagiBoundedImpl bounds) 10000
+        putStrLn "OK"
+
 -- Check output where dupChan at known point in input stream, with two
 -- concurrent readers.
 dupChanTest1 :: Implementation inc outc Int -> Int -> IO ()

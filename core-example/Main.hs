@@ -6,6 +6,7 @@ import Control.Concurrent.MVar
 import Control.Concurrent
 import qualified Control.Concurrent.Chan.Unagi as U
 import qualified Control.Concurrent.Chan.Unagi.Unboxed as UU
+import qualified Control.Concurrent.Chan.Unagi.Bounded as UB
 import qualified Control.Concurrent.Chan as C
 import qualified Control.Concurrent.STM.TQueue as S
 import Control.Concurrent.STM
@@ -30,7 +31,8 @@ main = do
 main = do
     [n] <- getArgs
     -- runU (read n)
-    runUU (read n)
+    -- runUU (read n)
+    runUB (read n)
 {-
 runU :: Int -> IO ()
 runU n = do
@@ -40,6 +42,7 @@ runU n = do
     replicateM_ n1000 $ U.writeChan i ()
     replicateM_ n1000 $ U.readChan o
  -}
+{-
 runUU :: Int -> IO ()
 runUU n = do
   (i,o) <- UU.newChan
@@ -47,6 +50,15 @@ runUU n = do
   replicateM_ 1000 $ do
     replicateM_ n1000 $ UU.writeChan i (0::Int)
     replicateM_ n1000 $ UU.readChan o
+ -}
+
+runUB :: Int -> IO ()
+runUB n = do
+  let n1000 = n `quot` 1000
+  (i,o) <- UB.newChan n1000
+  replicateM_ 1000 $ do
+    replicateM_ n1000 $ UB.writeChan i (0::Int)
+    replicateM_ n1000 $ UB.readChan o
 
 {-
 runU :: Int -> Int -> Int -> IO ()

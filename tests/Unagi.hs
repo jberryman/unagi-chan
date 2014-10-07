@@ -31,11 +31,12 @@ unagiMain = do
     mapM_ correctInitialWrites [ (maxBound - UI.sEGMENT_LENGTH), (maxBound - UI.sEGMENT_LENGTH) - 1, maxBound, minBound, 0]
     putStrLn "OK"
     -- ------
-    let tries = 50000
+    let tries = 10000
     putStrLn $ "Checking for deadlocks from killed Unagi reader in a fancy way, x"++show tries
     checkDeadlocksReaderUnagi tries
 
 
+-- TODO CONSIDER ADDING newChanStarting (or raplcing newChan) TO IMPLEMENTATIONS, AND CONSOLIDATE THESE IN Smoke.hs
 smoke :: Int -> IO ()
 smoke n = smoke1 n >> smoke2 n
 
@@ -135,7 +136,7 @@ checkDeadlocksReaderUnagi :: Int -> IO ()
 checkDeadlocksReaderUnagi times = do
   let run 0 normalRetries numRace = putStrLn $ "Lates: "++(show normalRetries)++", Races: "++(show numRace)
       run n normalRetries numRace
-       | (normalRetries + numRace) > (times `div` 5) = error "This test is taking too long. Please retry, and if still failing send the log to me"
+       | (normalRetries + numRace) > (times `div` 3) = error "This test is taking too long. Please retry, and if still failing send the log to me"
        | otherwise = do
          -- we'll kill the reader with our special exception half the time,
          -- expecting that we never get our race condition on those runs:

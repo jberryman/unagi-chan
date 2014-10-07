@@ -284,7 +284,9 @@ type SegSource a = IO (StreamSegment a)
 
 newSegmentSource :: IO (SegSource a)
 newSegmentSource = do
-    arr <- P.newArray sEGMENT_LENGTH Empty
+    -- NOTE: evaluate Empty seems to be required here in order to not raise
+    -- "Stored Empty Ticket went stale!"  exception when in GHCi.
+    arr <- evaluate Empty >>= P.newArray sEGMENT_LENGTH
     return (P.cloneMutableArray arr 0 sEGMENT_LENGTH)
 
 -- ----------

@@ -4,6 +4,7 @@ module Main
 
 import qualified Control.Concurrent.Chan.Unagi as U
 import qualified Control.Concurrent.Chan.Unagi.Unboxed as UU
+import qualified Control.Concurrent.Chan.Unagi.Bounded as UB
 #ifdef COMPARE_BENCHMARKS
 import Control.Concurrent.Chan
 import Control.Concurrent.STM
@@ -25,6 +26,7 @@ main = do
 
   (fastEmptyUI,fastEmptyUO) <- U.newChan
   (fastEmptyUUI,fastEmptyUUO) <- UU.newChan
+  (fastEmptyUBI,fastEmptyUBO) <- UB.newChan 1024 -- only needs to be 1, but do apples-to-apples by matching sEGMENT_SIZE of other implementations
 #ifdef COMPARE_BENCHMARKS
   chanEmpty <- newChan
   tqueueEmpty <- newTQueueIO
@@ -38,9 +40,11 @@ main = do
     [ bgroup "Latency micro-benchmark" $
         [ bench "unagi-chan Unagi" $ nfIO (U.writeChan fastEmptyUI () >> U.readChan fastEmptyUO)
         , bench "unagi-chan Unagi.Unboxed" $ nfIO (UU.writeChan fastEmptyUUI (0::Int) >> UU.readChan fastEmptyUUO) -- TODO comparing Int writing to (). Change?
+        , bench "unagi-chan Unagi.Bounded 1024" $ nfIO (UB.writeChan fastEmptyUBI (0::Int) >> UB.readChan fastEmptyUBO) -- TODO comparing Int writing to (). Change?
+        , bench "unagi-chan Unagi.Bounded 1024 with tryWriteChan" $ nfIO (UB.tryWriteChan fastEmptyUBI (0::Int) >> UB.readChan fastEmptyUBO) -- TODO comparing Int writing to (). Change?
 #ifdef COMPARE_BENCHMARKS
-        , bench "Chan" (writeChan chanEmpty () >> readChan chanEmpty)
-        , bench "TQueue" (atomically (writeTQueue tqueueEmpty () >>  readTQueue tqueueEmpty))
+        , bench "Chan" $ nfIO $ (writeChan chanEmpty () >> readChan chanEmpty)
+        , bench "TQueue" $ nfIO $ (atomically (writeTQueue tqueueEmpty () >>  readTQueue tqueueEmpty))
         {-
         -- TODO when comparing our bounded queues:
         , bench "TBQueue" (atomically (writeTBQueue tbqueueEmpty () >>  readTBQueue tbqueueEmpty))
@@ -53,9 +57,10 @@ main = do
         [ bgroup "sequential write all then read all" $
               [ bench "unagi-chan Unagi" $ nfIO $ runtestSplitChanU1 n
               , bench "unagi-chan Unagi.Unboxed" $ nfIO $ runtestSplitChanUU1 n
+              , bench "unagi-chan Unagi.Bounded" $ nfIO $ runtestSplitChanUB1 n
 #ifdef COMPARE_BENCHMARKS
-              , bench "Chan" $ runtestChan1 n
-              , bench "TQueue" $ runtestTQueue1 n
+              , bench "Chan" $ nfIO $ runtestChan1 n
+              , bench "TQueue" $ nfIO $ runtestTQueue1 n
            -- , bench "TBQueue" $ runtestTBQueue1 n
            -- , bench "lockfree-queue" $ runtestLockfreeQueue1 n
 #endif
@@ -63,9 +68,10 @@ main = do
         , bgroup "repeated write some, read some" $ 
               [ bench "unagi-chan Unagi" $ nfIO $ runtestSplitChanU2 n
               , bench "unagi-chan Unagi.Unboxed" $ nfIO $ runtestSplitChanUU2 n
+              , bench "unagi-chan Unagi.Bounded" $ nfIO $ runtestSplitChanUB2 n
 #ifdef COMPARE_BENCHMARKS
-              , bench "Chan" $ runtestChan2 n
-              , bench "TQueue" $ runtestTQueue2 n
+              , bench "Chan" $ nfIO $ runtestChan2 n
+              , bench "TQueue" $ nfIO $ runtestTQueue2 n
            -- , bench "TBQueue" $ runtestTBQueue2 n
            -- , bench "lockfree-queue" $ runtestLockfreeQueue2 n
 #endif
@@ -104,6 +110,21 @@ runtestSplitChanUU2 n = do
     replicateM_ n1000 $ UU.readChan o
 
 
+-- unagi-chan Unagi Bounded --
+-- NOTE: the first does no testing of the bounds checking overhead, while the
+-- second does only a little. The multi.hs tests are a better place to look.
+runtestSplitChanUB1, runtestSplitChanUB2 :: Int -> IO ()
+runtestSplitChanUB1 n = do
+  (i,o) <- UB.newChan n
+  replicateM_ n $ UB.writeChan i ()
+  replicateM_ n $ UB.readChan o
+
+runtestSplitChanUB2 n = do
+  let n1000 = n `quot` 1000
+  (i,o) <- UB.newChan n1000
+  replicateM_ 1000 $ do
+    replicateM_ n1000 $ UB.writeChan i ()
+    replicateM_ n1000 $ UB.readChan o
 
 
 #ifdef COMPARE_BENCHMARKS
