@@ -1,5 +1,5 @@
 name:                unagi-chan
-version:             0.1.1.0
+version:             0.2.0.0
 
 synopsis:            Fast and scalable concurrent queues for x86, with a Chan-like API
 
