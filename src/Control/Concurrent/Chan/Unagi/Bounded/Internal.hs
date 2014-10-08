@@ -23,7 +23,7 @@ import qualified Data.Primitive as P
 import Control.Monad
 import Control.Applicative
 import Data.Bits
-import Data.Maybe(fromMaybe)
+import Data.Maybe(fromMaybe,isJust)
 import Data.Typeable(Typeable)
 import GHC.Exts(inline)
 
@@ -455,16 +455,14 @@ tryWriterCheckin :: WriterCheckpoint -> IO Bool
 tryWriterCheckin (WriterCheckpoint v) = do
 -- On GHC > 7.8 we have an atomic `tryReadMVar`.  On earlier GHC readMVar is
 -- take+put, creating a race condition; in this case we use take+tryPut
--- ensuring the MVar stays full even if a reader's tryPut slips an () in:
+-- ensuring the MVar stays full even if a reader's tryPut slips an () in.
+-- HOWEVER, tryReadMVar is also buggy in GHC < 7.8.3
+--   https://ghc.haskell.org/trac/ghc/ticket/9148
     unblocked <- 
-#if __GLASGOW_HASKELL__ < 708
-      tryTakeMVar v >>= maybe (return False) ((True <$) . tryPutMVar v)
+#ifdef TRYREADMVAR
+      isJust <$> tryReadMVar v
 #else
       tryTakeMVar v >>= maybe (return False) ((True <$) . tryPutMVar v)
-      -- This is what we really want, unfortunately (and unfortunately for the
-      -- hours of my life I'll never get back) this is buggy in GHC < 7.8.3:
-      --   https://ghc.haskell.org/trac/ghc/ticket/9148
-    --isJust <$> tryReadMVar v
 #endif
     -- make sure we can see the reader's segment creation once we unblock...
     loadLoadBarrier
