@@ -1,19 +1,23 @@
 {-# LANGUAGE BangPatterns , DeriveDataTypeable, CPP #-}
-module Control.Concurrent.Chan.Unagi.Internal
+module Control.Concurrent.Chan.Unagi.NoBlocking.Internal
 #ifdef NOT_x86
     {-# WARNING "This library is unlikely to perform well on architectures without a fetch-and-add instruction" #-}
 #endif
     (sEGMENT_LENGTH
-    , InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell(..), Stream(..)
+    , InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell, Stream(..)
     , NextSegment(..), StreamHead(..)
-    , newChanStarting, writeChan, readChan, readChanOnException
+    , newChanStarting, writeChan, readChan, Element(..)
     , dupChan
     )
     where
 
 -- Forked from src/Control/Concurrent/Chan/Unagi/Internal.hs at 065cd68010
+--
+-- The implementation here is Control.Concurrent.Chan.Unagi with the blocking
+-- read mechanics removed, the required CAS rendevouz replaced with
+-- writeArray/readArray, and MPSC/SPMC/SPSC variants that eliminate streamHead
+-- updates and atomic operations on any 'S' sides.
 
-import Control.Concurrent.MVar
 import Data.IORef
 import Control.Exception
 import Control.Monad.Primitive(RealWorld)
@@ -24,24 +28,20 @@ import Control.Monad
 import Control.Applicative
 import Data.Bits
 import Data.Typeable(Typeable)
-import GHC.Exts(inline)
 
 import Control.Concurrent.Chan.Unagi.Constants
 
 
 -- | The write end of a channel created with 'newChan'.
-data InChan a = InChan !(Ticket (Cell a)) !(ChanEnd a)
-    deriving Typeable
+newtype InChan a = InChan (ChanEnd a)
+    deriving (Typeable,Eq)
 
 -- | The read end of a channel created with 'newChan'.
 newtype OutChan a = OutChan (ChanEnd a)
-    deriving Typeable
+    deriving (Typeable,Eq)
 
-instance Eq (InChan a) where
-    (InChan _ (ChanEnd _ _ headA)) == (InChan _ (ChanEnd _ _ headB))
-        = headA == headB
-instance Eq (OutChan a) where
-    (OutChan (ChanEnd _ _ headA)) == (OutChan (ChanEnd _ _ headB))
+instance Eq (ChanEnd a) where
+     (ChanEnd _ _ headA) == (ChanEnd _ _ headB)
         = headA == headB
 
 -- TODO POTENTIAL CPP FLAGS (or functions)
@@ -69,14 +69,11 @@ type StreamSegment a = P.MutableArray RealWorld (Cell a)
 
 -- TRANSITIONS and POSSIBLE VALUES:
 --   During Read:
---     Empty   -> Blocking
---     Written
---     Blocking (only when dupChan used)
+--     Nothing
+--     Just a
 --   During Write:
---     Empty   -> Written 
---     Blocking
-data Cell a = Empty | Written a | Blocking !(MVar a)
-
+--     Nothing   -> Just a
+type Cell a = Maybe a
 
 -- NOTE In general we'll have two segments allocated at any given time in
 -- addition to the segment template, so in the worst case, when the program
@@ -97,21 +94,19 @@ newChanStarting :: Int -> IO (InChan a, OutChan a)
 {-# INLINE newChanStarting #-}
 newChanStarting !startingCellOffset = do
     segSource <- newSegmentSource
-    firstSeg <- segSource
-    -- collect a ticket to save for writer CAS
-    savedEmptyTkt <- readArrayElem firstSeg 0
-    stream <- Stream firstSeg <$> newIORef NoSegment
+    stream <- Stream <$> segSource 
+                     <*> newIORef NoSegment
     let end = ChanEnd segSource 
                   <$> newCounter (startingCellOffset - 1)
                   <*> newIORef (StreamHead startingCellOffset stream)
-    liftA2 (,) (InChan savedEmptyTkt <$> end) (OutChan <$> end)
+    liftA2 (,) (InChan <$> end) (OutChan <$> end)
 
 -- | Duplicate a chan: the returned @OutChan@ begins empty, but data written to
 -- the argument @InChan@ from then on will be available from both the original
 -- @OutChan@ and the one returned here, creating a kind of broadcast channel.
 dupChan :: InChan a -> IO (OutChan a)
 {-# INLINE dupChan #-}
-dupChan (InChan _ (ChanEnd segSource counter streamHead)) = do
+dupChan (InChan (ChanEnd segSource counter streamHead)) = do
     hLoc <- readIORef streamHead
     loadLoadBarrier  -- NOTE [1]
     wCount <- readCounter counter
@@ -126,87 +121,48 @@ dupChan (InChan _ (ChanEnd segSource counter streamHead)) = do
 -- | Write a value to the channel.
 writeChan :: InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
-writeChan (InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) = \a-> mask_ $ do 
+writeChan (InChan ce@(ChanEnd segSource _ _)) = \a-> mask_ $ do 
     (segIx, (Stream seg next)) <- moveToNextCell ce
-    (success,nonEmptyTkt) <- casArrayElem seg segIx savedEmptyTkt (Written a)
+    P.writeArray seg segIx (Just a)
     -- try to pre-allocate next segment; NOTE [1]
     when (segIx == 0) $ void $
       waitingAdvanceStream next segSource 0
-    when (not success) $
-        case peekTicket nonEmptyTkt of
-             Blocking v -> putMVar v a
-             Empty      -> error "Stored Empty Ticket went stale!" -- NOTE [2]
-             Written _  -> error "Nearly Impossible! Expected Blocking"
   -- [1] the writer which arrives first to the first cell of a new segment is
   -- tasked (somewhat arbitrarily) with trying to pre-allocate the *next*
   -- segment hopefully ahead of any readers or writers who might need it. This
   -- will race with any reader *or* writer that tries to read the next segment
   -- and finds it's empty (see `waitingAdvanceStream`); when this wins
   -- (hopefully the vast majority of the time) we avoid a throughput hit.
-  --
-  -- [2] this assumes that the compiler is statically-allocating Empty, sharing
-  -- the constructor among all uses, and that it never moves it between
-  -- checking the pointer stored in the array and checking the pointer in the
-  -- cached Any Empty value. If this is incorrect then the Ticket approach to
-  -- CAS is equally incorrect (though maybe less likely to fail).
 
+-- TODO or 'Item'? And something shorter than 'peeklement'?
 
--- We would like our queue to behave like Chan in that an async exception
--- raised in a reader known to be blocked or about to block on an empty queue
--- never results in a lost message; this matches our simple intuition about the
--- mechanics of a queue: if you're last in line for a cupcake and have to leave
--- you wouldn't expect the cake that would have gone to you to disappear.
---
--- But there are other systems that a busy cake shop might use that you could
--- easily imagine resulting in a lost cake, and that's a different question
--- from whether cakes are given to well-behaved customers in the order they
--- came out of the oven, or whether a customer leaving at the wrong moment
--- might cause the cake shop to burn down...
-readChanOnExceptionUnmasked :: (IO a -> IO a) -> OutChan a -> IO a
-{-# INLINE readChanOnExceptionUnmasked #-}
-readChanOnExceptionUnmasked h = \(OutChan ce)-> do
-    (segIx, (Stream seg _)) <- moveToNextCell ce
-    cellTkt <- readArrayElem seg segIx
-    case peekTicket cellTkt of
-         Written a -> return a
-         Empty -> do
-            v <- newEmptyMVar
-            (success,elseWrittenCell) <- casArrayElem seg segIx cellTkt (Blocking v)
-            if success 
-              then readBlocking v
-              else case peekTicket elseWrittenCell of
-                        -- In the meantime a writer has written. Good!
-                        Written a -> return a
-                        -- ...or a dupChan reader initiated blocking:
-                        Blocking v2 -> readBlocking v2
-                        _ -> error "Impossible! Expecting Written or Blocking"
-         Blocking v -> readBlocking v
-  -- N.B. must use `readMVar` here to support `dupChan`:
-  where readBlocking v = inline h $ readMVar v 
+-- | An idempotent @IO@ action that returns a particular enqueued element when
+-- and if it becomes available. Each @Element@ corresponds to a particular
+-- enqueued element, i.e. a returned @Element@ always offers the only means to
+-- access one particular enqueued item.
+newtype Element a = Element { peekElement :: IO (Maybe a) }
 
-
--- | Read an element from the chan, blocking if the chan is empty.
+-- | Read an element from the chan, returning an @'Element' a@ future which
+-- returns an actual element, when available, via 'peekElement'.
 --
 -- /Note re. exceptions/: When an async exception is raised during a @readChan@ 
--- the message that the read would have returned is likely to be lost, even when
--- the read is known to be blocked on an empty queue. If you need to handle
--- this scenario, you can use 'readChanOnException'.
-readChan :: OutChan a -> IO a
+-- the message that the read would have returned is likely to be lost, just as
+-- it would be when raised directly after this function returns.
+readChan :: OutChan a -> IO (Element a)
 {-# INLINE readChan #-}
-readChan = readChanOnExceptionUnmasked id
+readChan (OutChan ce) = do  -- NOTE 1
+    (segIx, (Stream seg _)) <- moveToNextCell ce
+    return $ Element $ P.readArray seg segIx
+ -- [1] We don't need to mask exceptions here. We say that exceptions raised in
+ -- readChan are linearizable as occuring just before we are to return with our
+ -- element. Note that the two effects in moveToNextCell are to increment the
+ -- counter (this is the point after which we lose the read), and set up any
+ -- future segments required (all atomic operations).
 
--- | Like 'readChan' but allows recovery of the queue element which would have
--- been read, in the case that an async exception is raised during the read. To
--- be precise exceptions are raised, and the handler run, only when
--- @readChanOnException@ is blocking.
---
--- The second argument is a handler that takes a blocking IO action returning
--- the element, and performs some recovery action.  When the handler is called,
--- the passed @IO a@ is the only way to access the element.
-readChanOnException :: OutChan a -> (IO a -> IO ()) -> IO a
-{-# INLINE readChanOnException #-}
-readChanOnException c h = mask_ $ 
-    readChanOnExceptionUnmasked (\io-> io `onException` (h io)) c
+-- TODO consider offering a readChanYield helper
+
+-- TODO use moveToNextCell/waitingAdvanceStream from Unagi.hs, only we'd need
+--      to parameterize those functions and types by 'Cell a' rather than 'a'.
 
 -- increments counter, finds stream segment of corresponding cell (updating the
 -- stream head pointer as needed), and returns the stream segment and relative
@@ -284,9 +240,7 @@ type SegSource a = IO (StreamSegment a)
 
 newSegmentSource :: IO (SegSource a)
 newSegmentSource = do
-    -- NOTE: evaluate Empty seems to be required here in order to not raise
-    -- "Stored Empty Ticket went stale!"  exception when in GHCi.
-    arr <- evaluate Empty >>= P.newArray sEGMENT_LENGTH
+    arr <- P.newArray sEGMENT_LENGTH Nothing
     return (P.cloneMutableArray arr 0 sEGMENT_LENGTH)
 
 -- ----------

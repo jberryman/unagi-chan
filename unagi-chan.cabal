@@ -10,6 +10,16 @@ description:
     limited usefulness outside of x86 architectures where the fetch-and-add
     instruction is not available.
     .
+    We export the following modules.
+    .
+    - @Unagi@: a general-purpose near drop-in replacement for @Chan@
+    .
+    - @Unagi.Unboxed@: like @Unagi@ but specialized for primitive types
+    .
+    - @Unagi.Bounded@: a bounded variant with blocking and non-blocking writes
+    .
+    - @Unagi.NoBlocking@: lowest latency implementations for when blocking reads aren't required.
+    .
     Here is an example benchmark measuring the time taken to concurrently write
     and read 100,000 messages, with work divided amongst increasing number of
     readers and writers, comparing against the top-performing queues in the
@@ -41,10 +51,12 @@ library
   exposed-modules:     Control.Concurrent.Chan.Unagi
                      , Control.Concurrent.Chan.Unagi.Unboxed
                      , Control.Concurrent.Chan.Unagi.Bounded
+                     , Control.Concurrent.Chan.Unagi.NoBlocking
 
   other-modules:       Control.Concurrent.Chan.Unagi.Internal
                      , Control.Concurrent.Chan.Unagi.Unboxed.Internal
                      , Control.Concurrent.Chan.Unagi.Bounded.Internal
+                     , Control.Concurrent.Chan.Unagi.NoBlocking.Internal
                      , Control.Concurrent.Chan.Unagi.Constants
                      , Utilities
                      , Data.Atomics.Counter.Fat
