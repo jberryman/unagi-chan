@@ -10,6 +10,7 @@ module Control.Concurrent.Chan.Unagi.NoBlocking (
     -- * Channel operations
     -- ** Reading
     , readChan
+    , readChanYield
     , Element(..)
     -- ** Writing
     , writeChan

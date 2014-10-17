@@ -14,6 +14,7 @@ import DupChan
 import Unagi
 import UnagiUnboxed
 import UnagiBounded
+import UnagiNoBlocking
 
 -- Other
 import Atomics
@@ -52,5 +53,6 @@ main = do
     unagiMain
     unagiUnboxedMain
     unagiBoundedMain
+    unagiNoBlockingMain
 
     putStrLn "ALL DONE!"

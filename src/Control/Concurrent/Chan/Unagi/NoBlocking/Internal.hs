@@ -6,7 +6,7 @@ module Control.Concurrent.Chan.Unagi.NoBlocking.Internal
     (sEGMENT_LENGTH
     , InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell, Stream(..)
     , NextSegment(..), StreamHead(..)
-    , newChanStarting, writeChan, readChan, Element(..)
+    , newChanStarting, writeChan, readChan, readChanYield, Element(..)
     , dupChan
     )
     where
@@ -28,6 +28,7 @@ import Control.Monad
 import Control.Applicative
 import Data.Bits
 import Data.Typeable(Typeable)
+import Control.Concurrent(yield)
 
 import Control.Concurrent.Chan.Unagi.Constants
 
@@ -159,7 +160,16 @@ readChan (OutChan ce) = do  -- NOTE 1
  -- counter (this is the point after which we lose the read), and set up any
  -- future segments required (all atomic operations).
 
--- TODO consider offering a readChanYield helper
+-- | Like read which loops, calling 'yield' until an element becomes available.
+--
+-- > readChanYield oc = readChan oc >>= \el->
+-- >     let go = peekElement el >>= maybe (yield >> go) return in go
+readChanYield :: OutChan a -> IO a
+{-# INLINE readChanYield #-}
+readChanYield oc = readChan oc >>= \el->
+    let go = peekElement el >>= maybe (yield >> go) return in go
+
+
 
 -- TODO use moveToNextCell/waitingAdvanceStream from Unagi.hs, only we'd need
 --      to parameterize those functions and types by 'Cell a' rather than 'a'.
