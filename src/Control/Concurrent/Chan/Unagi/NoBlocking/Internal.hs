@@ -8,10 +8,15 @@ module Control.Concurrent.Chan.Unagi.NoBlocking.Internal
     , NextSegment(..), StreamHead(..)
     , newChanStarting, writeChan, readChan, readChanYield, Element(..)
     , dupChan
+    , isActive
     )
     where
 
 -- Forked from src/Control/Concurrent/Chan/Unagi/Internal.hs at 065cd68010
+--
+-- Some detailed NOTEs present in Control.Concurrent.Chan.Unagi have been
+-- removed here although they still pertain. If you intend to work on this 
+-- module, please be sure you're familiar with those concerns.
 --
 -- The implementation here is Control.Concurrent.Chan.Unagi with the blocking
 -- read mechanics removed, the required CAS rendevouz replaced with
@@ -34,11 +39,13 @@ import Control.Concurrent.Chan.Unagi.Constants
 
 
 -- | The write end of a channel created with 'newChan'.
-newtype InChan a = InChan (ChanEnd a)
+data InChan a = InChan !(IORef Bool) -- Used for creating an OutChan in dupChan
+                       !(ChanEnd a)
     deriving (Typeable,Eq)
 
 -- | The read end of a channel created with 'newChan'.
-newtype OutChan a = OutChan (ChanEnd a)
+data OutChan a = OutChan !(IORef Bool) -- Is corresponding InChan still alive?
+                         !(ChanEnd a) 
     deriving (Typeable,Eq)
 
 instance Eq (ChanEnd a) where
@@ -76,11 +83,6 @@ type StreamSegment a = P.MutableArray RealWorld (Cell a)
 --     Nothing   -> Just a
 type Cell a = Maybe a
 
--- NOTE In general we'll have two segments allocated at any given time in
--- addition to the segment template, so in the worst case, when the program
--- exits we will have allocated ~ 3 segments extra memory than was actually
--- required.
-
 data Stream a = 
     Stream !(StreamSegment a)
            -- The next segment in the stream; new segments are allocated and
@@ -100,40 +102,65 @@ newChanStarting !startingCellOffset = do
     let end = ChanEnd segSource 
                   <$> newCounter (startingCellOffset - 1)
                   <*> newIORef (StreamHead startingCellOffset stream)
-    liftA2 (,) (InChan <$> end) (OutChan <$> end)
+    inEnd@(ChanEnd _ _ inHeadRef) <- end
+    finalizee <- newIORef True
+    void $ mkWeakIORef inHeadRef $ do -- NOTE [1]
+        -- make sure the array writes of any final writeChans occur before the
+        -- following writeIORef:
+        writeBarrier
+        writeIORef finalizee False
+    (,) (InChan finalizee inEnd) <$> (OutChan finalizee <$> end)
+ -- [1] We no longer get blocked indefinitely exception in readers when all
+ -- writers disappear, so we use finalizers. See also NOTE 1 in 'writeChan' and
+ -- implementation of 'isActive' below.
+
+-- | An action that returns @False@ sometime after the chan no longer has any
+-- writers.
+--
+-- After @False@ is returned, any 'peekElement' which returns @Nothing@ can be
+-- considered to be dead. Note that in the blocking implementations a
+-- @BlockedIndefinitelyOnMVar@ exception is raised, so this function is
+-- unnecessary.
+isActive :: OutChan a -> IO Bool
+isActive (OutChan finalizee _) = do
+    b <- readIORef finalizee
+    -- make sure that a peekElement that follows is not moved ahead:
+    loadLoadBarrier 
+    return b
+
+-- TODO make a note here about our new 'stream' function :: OutChan a -> Stream a
+-- TODO also implement a 'streamN' :: Int -> [Stream a]
 
 -- | Duplicate a chan: the returned @OutChan@ begins empty, but data written to
 -- the argument @InChan@ from then on will be available from both the original
 -- @OutChan@ and the one returned here, creating a kind of broadcast channel.
 dupChan :: InChan a -> IO (OutChan a)
 {-# INLINE dupChan #-}
-dupChan (InChan (ChanEnd segSource counter streamHead)) = do
+dupChan (InChan finalizee (ChanEnd segSource counter streamHead)) = do
     hLoc <- readIORef streamHead
-    loadLoadBarrier  -- NOTE [1]
+    loadLoadBarrier
     wCount <- readCounter counter
-    
     counter' <- newCounter wCount 
     streamHead' <- newIORef hLoc
-    return $ OutChan (ChanEnd segSource counter' streamHead')
-  -- [1] We must read the streamHead before inspecting the counter; otherwise,
-  -- as writers write, the stream head pointer may advance past the cell
-  -- indicated by wCount.
+    return $ OutChan finalizee $ ChanEnd segSource counter' streamHead'
+
 
 -- | Write a value to the channel.
 writeChan :: InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
-writeChan (InChan ce@(ChanEnd segSource _ _)) = \a-> mask_ $ do 
-    (segIx, (Stream seg next)) <- moveToNextCell ce
+writeChan (InChan _ ce@(ChanEnd segSource _ _)) = \a-> mask_ $ do 
+    (segIx, (Stream seg next), maybeUpdateStreamHead) <- moveToNextCell ce
     P.writeArray seg segIx (Just a)
-    -- try to pre-allocate next segment; NOTE [1]
+    maybeUpdateStreamHead  -- NOTE [1]
+    -- try to pre-allocate next segment:
     when (segIx == 0) $ void $
       waitingAdvanceStream next segSource 0
-  -- [1] the writer which arrives first to the first cell of a new segment is
-  -- tasked (somewhat arbitrarily) with trying to pre-allocate the *next*
-  -- segment hopefully ahead of any readers or writers who might need it. This
-  -- will race with any reader *or* writer that tries to read the next segment
-  -- and finds it's empty (see `waitingAdvanceStream`); when this wins
-  -- (hopefully the vast majority of the time) we avoid a throughput hit.
+ -- [1] We return the maybeUpdateStreamHead action from moveToNextCell rather
+ -- than running it before returning, because we must ensure that the
+ -- streamHead IORef is not GC'd (and its finalizer run) before the last
+ -- element is written; else the user has no way of being sure that it has read
+ -- the last element. See 'newChanStarting' and 'isActive'.
+
 
 -- TODO or 'Item'? And something shorter than 'peeklement'?
 
@@ -151,8 +178,9 @@ newtype Element a = Element { peekElement :: IO (Maybe a) }
 -- it would be when raised directly after this function returns.
 readChan :: OutChan a -> IO (Element a)
 {-# INLINE readChan #-}
-readChan (OutChan ce) = do  -- NOTE 1
-    (segIx, (Stream seg _)) <- moveToNextCell ce
+readChan (OutChan _ ce) = do  -- NOTE [1]
+    (segIx, (Stream seg _), maybeUpdateStreamHead) <- moveToNextCell ce
+    maybeUpdateStreamHead
     return $ Element $ P.readArray seg segIx
  -- [1] We don't need to mask exceptions here. We say that exceptions raised in
  -- readChan are linearizable as occuring just before we are to return with our
@@ -160,14 +188,22 @@ readChan (OutChan ce) = do  -- NOTE 1
  -- counter (this is the point after which we lose the read), and set up any
  -- future segments required (all atomic operations).
 
--- | Like read which loops, calling 'yield' until an element becomes available.
---
--- > readChanYield oc = readChan oc >>= \el->
--- >     let go = peekElement el >>= maybe (yield >> go) return in go
+
+-- | Like read which loops, calling 'yield' until an element becomes available,
+-- or (like 'Control.Concurrent.Chan.Unagi.readChan' etc.) throwing a
+-- 'BlockedIndefinitelyOnMVar' exception if the read is determined never to
+-- succeed.
 readChanYield :: OutChan a -> IO a
 {-# INLINE readChanYield #-}
 readChanYield oc = readChan oc >>= \el->
-    let go = peekElement el >>= maybe (yield >> go) return in go
+    let peekMaybe f = peekElement el >>= maybe f return 
+        go = peekMaybe checkAndGo
+        checkAndGo = do 
+            b <- isActive oc
+            if b then yield >> go
+                 -- Do a necessary final check of the element:
+                 else peekMaybe $ throwIO BlockedIndefinitelyOnMVar
+     in go
 
 
 
@@ -177,11 +213,10 @@ readChanYield oc = readChan oc >>= \el->
 -- increments counter, finds stream segment of corresponding cell (updating the
 -- stream head pointer as needed), and returns the stream segment and relative
 -- index of our cell.
-moveToNextCell :: ChanEnd a -> IO (Int, Stream a)
+moveToNextCell :: ChanEnd a -> IO (Int, Stream a, IO ())
 {-# INLINE moveToNextCell #-}
 moveToNextCell (ChanEnd segSource counter streamHead) = do
     (StreamHead offset0 str0) <- readIORef streamHead
-    -- NOTE [3]
 #ifdef NOT_x86 
     -- fetch-and-add is a full barrier on x86; otherwise we need to make sure
     -- the read above occurrs before our fetch-and-add:
@@ -194,30 +229,15 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
         {-# INLINE go #-}
         go 0 str = return str
         go !n (Stream _ next) =
-            waitingAdvanceStream next segSource (nEW_SEGMENT_WAIT*segIx) -- NOTE [1]
+            waitingAdvanceStream next segSource (nEW_SEGMENT_WAIT*segIx)
               >>= go (n-1)
     str <- go segsAway str0
-    when (segsAway > 0) $ do
-        let !offsetN = 
-              offset0 + (segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH) --(segsAway*sEGMENT_LENGTH)
-        writeIORef streamHead $ StreamHead offsetN str -- NOTE [2]
-    return (segIx,str)
-  -- [1] All readers or writers needing to work with a not-yet-created segment
-  -- race to create it, but those past index 0 have progressively long waits; 20
-  -- is chosen as 20 readIORefs should be more than enough time for writer/reader
-  -- 0 to add the new segment (if it's not descheduled).
-  --
-  -- [2] advancing the stream head pointer on segIx == sEGMENT_LENGTH - 1 would
-  -- be more correct, but this is simpler here. This may move the head pointer
-  -- BACKWARDS if the thread was descheduled, but that's not a correctness
-  -- issue.
-  --
-  -- [3] There is a theoretical race condition here: thread reads head and is
-  -- descheduled, meanwhile other readers/writers increment counter one full
-  -- lap; when we increment we think we've found our cell in what is actually a
-  -- very old segment. However in this scenario all addressable memory will
-  -- have been consumed just by the array pointers whivh haven't been able to
-  -- be GC'd. So I don't think this is something to worry about.
+    let !maybeUpdateStreamHead = 
+          when (segsAway > 0) $ do
+            let !offsetN = 
+                  offset0 + (segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH) --(segsAway*sEGMENT_LENGTH)
+            writeIORef streamHead $ StreamHead offsetN str
+    return (segIx,str, maybeUpdateStreamHead)
 
 
 -- thread-safely try to fill `nextSegRef` at the next offset with a new

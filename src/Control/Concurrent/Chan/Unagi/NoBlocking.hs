@@ -12,6 +12,8 @@ module Control.Concurrent.Chan.Unagi.NoBlocking (
     , readChan
     , readChanYield
     , Element(..)
+    -- *** Utilities
+    , isActive 
     -- ** Writing
     , writeChan
     , writeList2Chan
@@ -30,6 +32,7 @@ import Control.Concurrent.Chan.Unagi.NoBlocking.Internal
 newChan :: IO (InChan a, OutChan a)
 newChan = newChanStarting (maxBound - 10) 
     -- lets us test counter overflow in tests and normal course of operation
+
 
 -- | Write an entire list of items to a chan type. Writes here from multiple
 -- threads may be interleaved, and infinite lists are supported.

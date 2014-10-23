@@ -7,6 +7,7 @@ import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Internal as UI
 import Control.Monad
 import qualified Data.Primitive as P
 import Data.IORef
+import System.Mem(performGC)
 
 import Control.Concurrent(forkIO,threadDelay)
 import Control.Concurrent.MVar
@@ -29,6 +30,11 @@ unagiNoBlockingMain = do
     -- ------
     putStr "Correct initial writes... "
     mapM_ correctInitialWrites [ (maxBound - UI.sEGMENT_LENGTH), (maxBound - UI.sEGMENT_LENGTH) - 1, maxBound, minBound, 0]
+    putStrLn "OK"
+    -- ------
+    putStr "Checking isActive... "
+    replicateM_ 10 isActiveTest
+    replicateM_ 10 readChanYieldTest
     putStrLn "OK"
     -- ------
     let tries = 10000
@@ -72,7 +78,10 @@ smoke2 n = do
 
 correctFirstWrite :: Int -> IO ()
 correctFirstWrite n = do
-    (i,UI.OutChan (UI.ChanEnd _ _ arrRef)) <- UI.newChanStarting n
+    (i,oc@(UI.OutChan _ (UI.ChanEnd _ _ arrRef))) <- UI.newChanStarting n
+    actv <- isActive oc
+    unless actv $
+        error "not isActive before first and only write"
     writeChan i ()
     (UI.StreamHead _ (UI.Stream arr _)) <- readIORef arrRef
     cell <- P.readArray arr 0
@@ -84,7 +93,7 @@ correctFirstWrite n = do
 -- also check that segments pre-allocated as expected
 correctInitialWrites :: Int -> IO ()
 correctInitialWrites startN = do
-    (i,(UI.OutChan (UI.ChanEnd _ _ arrRef))) <- UI.newChanStarting startN
+    (i,(UI.OutChan _ (UI.ChanEnd _ _ arrRef))) <- UI.newChanStarting startN
     let writes = [0..UI.sEGMENT_LENGTH]
     mapM_ (writeChan i) writes
     (UI.StreamHead _ (UI.Stream arr next)) <- readIORef arrRef
@@ -159,8 +168,8 @@ checkDeadlocksReaderUnagi times = do
          writeChan i 2 `onException` ( putStrLn "Exception from second writeChan!")
          finalRead <- readChanErr o `onException` ( putStrLn "Exception from final readChan!")
          
-         oCnt <- readCounter $ (\(UI.OutChan(UI.ChanEnd _ cntr _))-> cntr) o
-         iCnt <- readCounter $ (\(UI.InChan (UI.ChanEnd _ cntr _))-> cntr) i
+         oCnt <- readCounter $ (\(UI.OutChan _ (UI.ChanEnd _ cntr _))-> cntr) o
+         iCnt <- readCounter $ (\(UI.InChan  _ (UI.ChanEnd _ cntr _))-> cntr) i
          unless (iCnt == numPreloaded + 1) $ 
             error "The InChan counter doesn't match what we'd expect from numPreloaded!"
 
@@ -188,3 +197,63 @@ checkDeadlocksReaderUnagi times = do
 
   run times 0 0
   putStrLn ""
+
+-- do a series of writes, forcing GC making sure remains true, then do the last
+-- write and loop on forcing GC until we see False.
+isActiveTest :: IO ()
+isActiveTest = do
+    let n = 100000
+        k = n `div` 100
+    let testWrites (inc,outc) = replicateM_ 100 $ do
+          replicateM_ k $ writeChan inc ()
+          performGC
+          actv <- isActive outc
+          unless actv $
+            error "isActive returned False before last write!"
+
+        lastWriteWait iters (inc,outc) = writeChan inc () >> go iters where
+          go i | i < (0::Int) = error "Timed out waiting for isActive to return False. Anomaly or possible bug."
+               | otherwise = do
+                   actv <- isActive outc
+                   when actv $ performGC >> go (i-1)
+    -- first with newChan:
+    c1 <- newChan
+    testWrites c1
+    lastWriteWait 1000 c1
+    -- then with a duplicated channel:
+    (inc2,_) <- newChan
+    outc2 <- dupChan inc2
+    testWrites (inc2,outc2)
+    lastWriteWait 1000 (inc2,outc2)
+
+-- Concurrently write [1..100000], while reading 100001 and prepending in a
+-- IORef. Then a handler catches and puts () in an MVar which we wait on.
+-- Then check that the elements were correct.
+readChanYieldTest :: IO ()
+readChanYieldTest = do
+    let n = 100000 :: Int
+    (inc,outc) <- newChan
+    saving <- newIORef []
+    exceptionRaised <- newIORef False
+    goAhead <- newEmptyMVar
+
+    let handling io = Control.Exception.catch io $ \BlockedIndefinitelyOnMVar ->
+            writeIORef exceptionRaised True
+
+    void $ forkIO $ replicateM_ (n+1) $ handling $ do
+        x <- readChanYield outc
+        modifyIORef' saving (x:)
+        when (x == n) $ -- about to do final deadlocking loop:
+            putMVar goAhead ()
+    void $ forkIO $ forM_ [1..n] $ writeChan inc
+
+    takeMVar goAhead
+    out <- readIORef saving
+    unless (out == [n,n-1..1]) $
+        error "readChanYieldTest reads incorrect!"
+
+    performGC
+    threadDelay 100000
+    raised <- readIORef exceptionRaised
+    unless raised $
+        error "Handler doesn't seem to have run in readChanYieldTest. Either a testing fluke or a bug."
