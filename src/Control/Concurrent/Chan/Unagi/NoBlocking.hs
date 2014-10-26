@@ -9,8 +9,8 @@ module Control.Concurrent.Chan.Unagi.NoBlocking (
     , InChan(), OutChan()
     -- * Channel operations
     -- ** Reading
+    , tryReadChan
     , readChan
-    , readChanYield
     , Element(..)
     -- *** Utilities
     , isActive 

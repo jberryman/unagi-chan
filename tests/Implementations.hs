@@ -17,6 +17,6 @@ unboxedUnagiImpl = (UU.newChan, UU.writeChan, UU.readChan, UU.dupChan)
 unagiBoundedImpl :: Int -> Implementation UB.InChan UB.OutChan a
 unagiBoundedImpl n =  (UB.newChan n, UB.writeChan, UB.readChan, UB.dupChan)
 
--- We use readChanYield as a simple semantic equivalent to a blocking readChan:
+-- We use our yield "blocking" readChan here:
 unagiNoBlockingImpl :: Implementation UN.InChan UN.OutChan a
-unagiNoBlockingImpl =  (UN.newChan, UN.writeChan, UN.readChanYield, UN.dupChan)
+unagiNoBlockingImpl =  (UN.newChan, UN.writeChan, UN.readChan, UN.dupChan)

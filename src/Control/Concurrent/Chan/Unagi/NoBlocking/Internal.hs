@@ -6,7 +6,7 @@ module Control.Concurrent.Chan.Unagi.NoBlocking.Internal
     (sEGMENT_LENGTH
     , InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell, Stream(..)
     , NextSegment(..), StreamHead(..)
-    , newChanStarting, writeChan, readChan, readChanYield, Element(..)
+    , newChanStarting, writeChan, tryReadChan, readChan, Element(..)
     , dupChan
     , isActive
     )
@@ -170,32 +170,34 @@ writeChan (InChan _ ce@(ChanEnd segSource _ _)) = \a-> mask_ $ do
 -- access one particular enqueued item.
 newtype Element a = Element { peekElement :: IO (Maybe a) }
 
+
 -- | Read an element from the chan, returning an @'Element' a@ future which
 -- returns an actual element, when available, via 'peekElement'.
 --
--- /Note re. exceptions/: When an async exception is raised during a @readChan@ 
+-- /Note re. exceptions/: When an async exception is raised during a @tryReadChan@ 
 -- the message that the read would have returned is likely to be lost, just as
 -- it would be when raised directly after this function returns.
-readChan :: OutChan a -> IO (Element a)
-{-# INLINE readChan #-}
-readChan (OutChan _ ce) = do  -- NOTE [1]
+tryReadChan :: OutChan a -> IO (Element a)
+{-# INLINE tryReadChan #-}
+tryReadChan (OutChan _ ce) = do  -- NOTE [1]
     (segIx, (Stream seg _), maybeUpdateStreamHead) <- moveToNextCell ce
     maybeUpdateStreamHead
     return $ Element $ P.readArray seg segIx
  -- [1] We don't need to mask exceptions here. We say that exceptions raised in
- -- readChan are linearizable as occuring just before we are to return with our
+ -- tryReadChan are linearizable as occuring just before we are to return with our
  -- element. Note that the two effects in moveToNextCell are to increment the
  -- counter (this is the point after which we lose the read), and set up any
  -- future segments required (all atomic operations).
 
 
--- | Like read which loops, calling 'yield' until an element becomes available,
--- or (like 'Control.Concurrent.Chan.Unagi.readChan' etc.) throwing a
--- 'BlockedIndefinitelyOnMVar' exception if the read is determined never to
--- succeed.
-readChanYield :: OutChan a -> IO a
-{-# INLINE readChanYield #-}
-readChanYield oc = readChan oc >>= \el->
+-- | The semantic equivalent to the blocking @readChan@ in the other
+-- implementations, this one calls 'tryReadChan', and loops on the 'Element'
+-- returned, calling 'yield' at each iteration when the element is not
+-- available, and throwing 'BlockedIndefinitelyOnMVar' when 'isActive'
+-- determines that a value will never be returned.
+readChan :: OutChan a -> IO a
+{-# INLINE readChan #-}
+readChan oc = tryReadChan oc >>= \el->
     let peekMaybe f = peekElement el >>= maybe f return 
         go = peekMaybe checkAndGo
         checkAndGo = do 
@@ -209,6 +211,8 @@ readChanYield oc = readChan oc >>= \el->
 
 -- TODO use moveToNextCell/waitingAdvanceStream from Unagi.hs, only we'd need
 --      to parameterize those functions and types by 'Cell a' rather than 'a'.
+--      And use the version of moveToNextCell here, which returns the update
+--      continuation.
 
 -- increments counter, finds stream segment of corresponding cell (updating the
 -- stream head pointer as needed), and returns the stream segment and relative

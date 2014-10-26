@@ -43,8 +43,8 @@ unagiNoBlockingMain = do
 
 
 -- Helper for when we know a read should succeed immediately:
-readChanErr :: OutChan a -> IO a
-readChanErr oc = readChan oc 
+tryReadChanErr :: OutChan a -> IO a
+tryReadChanErr oc = tryReadChan oc 
                     >>= peekElement 
                     >>= maybe (error "A read we expected to succeed failed!") return
 
@@ -59,7 +59,7 @@ smoke1 n = do
     let inp = [0 .. (UI.sEGMENT_LENGTH * 3)]
     mapM_ (writeChan i) inp
     forM_ inp $ \inx-> do
-        outx <- readChanErr o
+        outx <- tryReadChanErr o
         unless (inx == outx) $
             error $ "Smoke test failed with starting offset of: "++(show n)
 
@@ -71,7 +71,7 @@ smoke2 n = do
     mapM_ (check i o) inp
  where check i o x = do
          writeChan i x
-         x' <- readChanErr o
+         x' <- tryReadChanErr o
          if x == x'
             then return ()
             else error $ "Smoke test failed with starting offset of: "++(show n)++"at write: "++(show x)
@@ -159,14 +159,14 @@ checkDeadlocksReaderUnagi times = do
          replicateM_ numPreloaded $ writeChan i (0::Int)
 
          rStart <- newEmptyMVar
-         rid <- forkIO $ (putMVar rStart () >> (forever $ void $ readChanYield o))
+         rid <- forkIO $ (putMVar rStart () >> (forever $ void $ readChan o))
          takeMVar rStart >> threadDelay 1
          throwTo rid ThreadKilled
 
          -- did killing reader damage queue for reads or writes?
          writeChan i 1 `onException` ( putStrLn "Exception from first writeChan!")
          writeChan i 2 `onException` ( putStrLn "Exception from second writeChan!")
-         finalRead <- readChanErr o `onException` ( putStrLn "Exception from final readChan!")
+         finalRead <- tryReadChanErr o `onException` ( putStrLn "Exception from final tryReadChan!")
          
          oCnt <- readCounter $ (\(UI.OutChan _ (UI.ChanEnd _ cntr _))-> cntr) o
          iCnt <- readCounter $ (\(UI.InChan  _ (UI.ChanEnd _ cntr _))-> cntr) i
@@ -241,7 +241,7 @@ readChanYieldTest = do
             writeIORef exceptionRaised True
 
     void $ forkIO $ replicateM_ (n+1) $ handling $ do
-        x <- readChanYield outc
+        x <- readChan outc
         modifyIORef' saving (x:)
         when (x == n) $ -- about to do final deadlocking loop:
             putMVar goAhead ()
