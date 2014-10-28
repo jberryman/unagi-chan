@@ -54,10 +54,6 @@ instance Eq (ChanEnd a) where
      (ChanEnd _ _ headA) == (ChanEnd _ _ headB)
         = headA == headB
 
--- TODO POTENTIAL CPP FLAGS (or functions)
---   - Strict element (or lazy? maybe also expose a writeChan' when relevant?)
---   - sEGMENT_LENGTH
---   - reads that clear the element immediately (or export as a special function?)
 
 -- InChan & OutChan are mostly identical, sharing a stream, but with
 -- independent counters
@@ -247,7 +243,6 @@ streamChan period (OutChan _ (ChanEnd segSource counter streamHead)) = do
     -- Adapted from moveToNextCell, given a stream segment location `str0` and
     -- its offset, `offset0`, this navigates to the UT.Stream segment holding `ix`
     -- and begins recursing in our UT.Stream wrappers
-    -- TODO we might try to unpack str0 here into seg and next here.
     let stream !offset0 str0 !ix = do
             -- Find our stream segment and relative index:
             let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
@@ -256,17 +251,16 @@ streamChan period (OutChan _ (ChanEnd segSource counter streamHead)) = do
                 {-# INLINE go #-}
                 go 0 str = return str
                 go !n (Stream _ next) =
-                    waitingAdvanceStream next segSource (nEW_SEGMENT_WAIT*segIx) -- TODO what if nEW_SEGMENT_WAIT became power-of-two?
+                    waitingAdvanceStream next segSource (nEW_SEGMENT_WAIT*segIx)
                       >>= go (n-1)
             -- the stream segment holding `ix`, and its calculated offset:
-            str@(Stream seg next) <- go segsAway str0
+            str@(Stream seg _) <- go segsAway str0
             let !strOffset = offset0+(segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH)  
             --                       (segsAway  *                 sEGMENT_LENGTH)
             return $ UT.Stream $ do
                 mbA <- P.readArray seg segIx
                 case mbA of
                      Nothing -> return UT.Pending
-                     -- TODO try specializing for segsAway == 0 here too
                      -- Navigate to next cell and return this cell's value
                      -- along with the wrapped action to read from the next
                      -- cell and possibly recurse.
