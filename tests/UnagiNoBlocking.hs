@@ -8,6 +8,7 @@ import Control.Monad
 import qualified Data.Primitive as P
 import Data.IORef
 import System.Mem(performGC)
+import Data.List(sort)
 
 import Control.Concurrent(forkIO,threadDelay)
 import Control.Concurrent.MVar
@@ -35,6 +36,12 @@ unagiNoBlockingMain = do
     putStr "Checking isActive... "
     replicateM_ 10 isActiveTest
     replicateM_ 10 readChanYieldTest
+    putStrLn "OK"
+    -- ------
+    putStr "Checking streamChan... "
+    streamChanSmoke
+    replicateM_ 3 $ streamChanConcurrentStreamerReader 10000000
+    replicateM_ 3 $ streamChanConcurrentStreamerWriter 10000000
     putStrLn "OK"
     -- ------
     let tries = 10000
@@ -257,3 +264,84 @@ readChanYieldTest = do
     raised <- readIORef exceptionRaised
     unless raised $
         error "Handler doesn't seem to have run in readChanYieldTest. Either a testing fluke or a bug."
+
+
+-- Smoke tests for different strides of interleaved streams, at different
+-- offsets, with concurrent stream readers.
+streamChanSmoke :: IO ()
+streamChanSmoke =
+  -- A few odd starting offsets, spanning Int/Counter overflow:
+  forM_ [0, maxBound - UI.sEGMENT_LENGTH, maxBound - UI.sEGMENT_LENGTH + 1, maxBound, minBound] $ \startingOffset ->
+    -- And few odd numbers of streams, where we especially want to exercise
+    -- skips of entire segments: 
+    forM_ [1,17, UI.sEGMENT_LENGTH, UI.sEGMENT_LENGTH+1, UI.sEGMENT_LENGTH*3+1] $ \numStreams-> do
+      (i,o) <- UI.newChanStarting startingOffset
+      let payload = 100000 :: Int
+      -- and these are what we'll expect to see returned:
+      let payloadPartsRev = map reverse $ [ [s,(s+numStreams).. payload ] | s<-[1..numStreams]]
+      forM_ [1..payload] (writeChan i)
+      strms <- streamChan numStreams o
+      strmsReadOut <- replicateM numStreams newEmptyMVar
+      unless (length strms == numStreams) $ 
+        error $ "numStreams /= length strms: "
+         ++(show numStreams)++" vs "++(show $ length strms)
+         ++" at offset: "++(show startingOffset)
+      forM_ (zip strms strmsReadOut) (forkIO . consumeUntilEmpty [])
+      parts <- forM (zip strmsReadOut payloadPartsRev) $ \(v,expectedStack)-> do
+        stack <- takeMVar v
+        unless (stack == expectedStack) $ error $ "Incorrect stream reads: "++(show stack)
+        return stack
+      unless ((sort $ concat parts) == [1..payload]) $
+        error $ "Somehow read parts weren't what we expected: "++(show parts)
+   where consumeUntilEmpty stack (strm,v) = do
+           h <- tryReadStream strm
+           case h of
+             (Cons x xs) -> consumeUntilEmpty (x:stack) (xs,v)
+             Pending -> putMVar v stack -- Done
+
+-- Simple writer/streamer concurrency test
+streamChanConcurrentStreamerWriter :: Int -> IO ()
+streamChanConcurrentStreamerWriter n = do
+    (i,o) <- newChan
+    [strm] <- streamChan 1 o
+    v <- newEmptyMVar
+    let streamReader s stack itr failCnt 
+          | failCnt > 4 = putMVar v $ Left "failCnt exceeded; possibly bug, but probably anomaly"
+          | itr > n = putMVar v $ Right stack
+          | otherwise = do
+              xs <- tryReadStream s
+              case xs of
+                Pending -> threadDelay 1000 >> streamReader s stack itr (failCnt+1)
+                Cons x xs' -> streamReader xs' (x:stack) (itr+1) 0
+    void $ forkIO $ streamReader strm [] (1::Int) (0::Int)
+    void $ forkIO $ mapM_ (writeChan i) [1..n]
+    strmOut <- either error return =<< takeMVar v
+    unless (strmOut == [n,n-1..1]) $ 
+        error $ "Stream reads were incorrect: "++(show strmOut)
+
+-- Simple reader/streamer concurrency test
+streamChanConcurrentStreamerReader :: Int -> IO ()
+streamChanConcurrentStreamerReader n = do
+    (i,o) <- newChan
+    [strm] <- streamChan 1 o
+    mapM_ (writeChan i) [1..n]
+    vStream <- newEmptyMVar
+    vOutchan <- newEmptyMVar
+    let streamReader s stack = do
+          xs <- tryReadStream s
+          case xs of
+            Pending -> putMVar vStream stack
+            Cons x xs' -> streamReader xs' (x:stack)
+
+        outchanReader stack = do
+          tryReadChan o >>= peekElement >>= maybe (putMVar vOutchan stack) (outchanReader . (:stack))
+    void $ forkIO $ streamReader strm []
+    void $ forkIO $ outchanReader []
+    strmOut <- takeMVar vStream `onException` putStr " :in takeMVar vStream: "
+    rdOut <- takeMVar vOutchan `onException` putStr " :in takeMVar vOutchan: "
+    let correctOut = [n,n-1..1]
+    unless (strmOut == correctOut) $ 
+        error $ "Stream reads were incorrect: "++(show strmOut)
+    unless (rdOut == correctOut) $ 
+        error $ "OutChan reads were incorrect: "++(show rdOut)
+

@@ -57,6 +57,7 @@ library
                      , Control.Concurrent.Chan.Unagi.Unboxed.Internal
                      , Control.Concurrent.Chan.Unagi.Bounded.Internal
                      , Control.Concurrent.Chan.Unagi.NoBlocking.Internal
+                     , Control.Concurrent.Chan.Unagi.NoBlocking.Types
                      , Control.Concurrent.Chan.Unagi.Constants
                      , Utilities
                      , Data.Atomics.Counter.Fat

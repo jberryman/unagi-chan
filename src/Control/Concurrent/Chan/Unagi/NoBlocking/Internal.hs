@@ -8,6 +8,7 @@ module Control.Concurrent.Chan.Unagi.NoBlocking.Internal
     , NextSegment(..), StreamHead(..)
     , newChanStarting, writeChan, tryReadChan, readChan, Element(..)
     , dupChan
+    , streamChan
     , isActive
     )
     where
@@ -36,6 +37,7 @@ import Data.Typeable(Typeable)
 import Control.Concurrent(yield)
 
 import Control.Concurrent.Chan.Unagi.Constants
+import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Types as UT
 
 
 -- | The write end of a channel created with 'newChan'.
@@ -134,6 +136,8 @@ isActive (OutChan finalizee _) = do
 -- | Duplicate a chan: the returned @OutChan@ begins empty, but data written to
 -- the argument @InChan@ from then on will be available from both the original
 -- @OutChan@ and the one returned here, creating a kind of broadcast channel.
+--
+-- See also 'streamChan' for a faster alternative that might be appropriate.
 dupChan :: InChan a -> IO (OutChan a)
 {-# INLINE dupChan #-}
 dupChan (InChan finalizee (ChanEnd segSource counter streamHead)) = do
@@ -207,6 +211,70 @@ readChan oc = tryReadChan oc >>= \el->
                  else peekMaybe $ throwIO BlockedIndefinitelyOnMVar
      in go
 
+
+-- | Produce the specified number of interleaved \"streams\" from a chan.
+-- Consuming a 'UI.Stream' is much faster than calling 'tryReadChan', and
+-- might be useful when an MPSC queue is needed, or when multiple consumers
+-- should be load-balanced in a round-robin fashion. 
+--
+-- Usage example:
+--
+-- > do mapM_ ('writeChan' i) [1..9]
+-- >    [str1, str2, str2] <- 'streamChan' 3 o
+-- >    forkIO $ printStream str1   -- prints: 1,4,7
+-- >    forkIO $ printStream str2   -- prints: 2,5,8
+-- >    forkIO $ printStream str3   -- prints: 3,6,9
+-- >  where 
+-- >    printStream str = do
+-- >      h <- 'tryReadStream' str
+-- >      case h of
+-- >        'Cons' a str' -> print a >> printStream str'
+-- >        -- We know that all values were already written, so a Pending tells 
+-- >        -- us we can exit; in other cases we might call 'yield' and then 
+-- >        -- retry that same @'tryReadStream' str@:
+-- >        'Pending' -> return ()
+streamChan :: Int -> OutChan a -> IO [UT.Stream a]
+{-# INLINE streamChan #-}
+streamChan period (OutChan _ (ChanEnd segSource counter streamHead)) = do
+    when (period < 1) $ error "Argument to streamChan must be > 0"
+
+    (StreamHead offsetInitial strInitial) <- readIORef streamHead
+    -- Make sure the read above occurs before our readCounter:
+    loadLoadBarrier
+    -- Linearizable as the first unread element; N.B. (+1):
+    !ix0 <- (+1) <$> readCounter counter
+
+    -- Adapted from moveToNextCell, given a stream segment location `str0` and
+    -- its offset, `offset0`, this navigates to the UT.Stream segment holding `ix`
+    -- and begins recursing in our UT.Stream wrappers
+    -- TODO we might try to unpack str0 here into seg and next here.
+    let stream !offset0 str0 !ix = do
+            -- Find our stream segment and relative index:
+            let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
+                         divMod_sEGMENT_LENGTH $! (ix - offset0)
+                      -- (ix - offset0) `quotRem` sEGMENT_LENGTH
+                {-# INLINE go #-}
+                go 0 str = return str
+                go !n (Stream _ next) =
+                    waitingAdvanceStream next segSource (nEW_SEGMENT_WAIT*segIx) -- TODO what if nEW_SEGMENT_WAIT became power-of-two?
+                      >>= go (n-1)
+            -- the stream segment holding `ix`, and its calculated offset:
+            str@(Stream seg next) <- go segsAway str0
+            let !strOffset = offset0+(segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH)  
+            --                       (segsAway  *                 sEGMENT_LENGTH)
+            return $ UT.Stream $ do
+                mbA <- P.readArray seg segIx
+                case mbA of
+                     Nothing -> return UT.Pending
+                     -- TODO try specializing for segsAway == 0 here too
+                     -- Navigate to next cell and return this cell's value
+                     -- along with the wrapped action to read from the next
+                     -- cell and possibly recurse.
+                     Just a -> UT.Cons a <$> stream strOffset str (ix+period)
+
+    mapM (stream offsetInitial strInitial) $
+     -- [ix0..(ix0+period-1)] -- WRONG (hint: overflow)!
+        take period $ iterate (+1) ix0
 
 
 -- TODO use moveToNextCell/waitingAdvanceStream from Unagi.hs, only we'd need

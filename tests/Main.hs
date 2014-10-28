@@ -55,4 +55,4 @@ main = do
     unagiBoundedMain
     unagiNoBlockingMain
 
-    putStrLn "ALL DONE!"
+    putStrLn "ALL TESTS PASSED!"

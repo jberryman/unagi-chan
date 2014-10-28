@@ -19,6 +19,9 @@ module Control.Concurrent.Chan.Unagi.NoBlocking (
     , writeList2Chan
     -- ** Broadcasting
     , dupChan
+    -- ** Streaming
+    , Stream(..), Cons(..)
+    , streamChan
     ) where
 
 -- Forked from src/Control/Concurrent/Chan/Unagi.hs at 065cd68010
@@ -26,7 +29,8 @@ module Control.Concurrent.Chan.Unagi.NoBlocking (
 -- TODO additonal functions:
 --   - faster write/read-many that increments counter by N
 
-import Control.Concurrent.Chan.Unagi.NoBlocking.Internal
+import Control.Concurrent.Chan.Unagi.NoBlocking.Internal hiding (Stream)
+import Control.Concurrent.Chan.Unagi.NoBlocking.Types
 
 -- | Create a new channel, returning its write and read ends.
 newChan :: IO (InChan a, OutChan a)
