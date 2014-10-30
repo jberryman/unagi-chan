@@ -8,6 +8,6 @@ module Control.Concurrent.Chan.Unagi.NoBlocking.Types where
 -- from 'Pending' to 'Cons' if a head element becomes available.
 newtype Stream a = Stream { tryReadStream :: IO (Cons a) }
 
-data Cons a = Cons a !(Stream a) -- ^ The head element along with the tail @Stream@.
-            | Pending            -- ^ The next element is not yet in the queue; you can retry 'tryReadStream' until a @Cons@ is returned.
+data Cons a = Cons a (Stream a) -- ^ The head element along with the tail @Stream@.
+            | Pending           -- ^ The next element is not yet in the queue; you can retry 'tryReadStream' until a @Cons@ is returned.
 
