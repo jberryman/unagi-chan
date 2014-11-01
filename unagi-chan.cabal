@@ -83,18 +83,11 @@ library
 --     affected by global allocator issues with pinned memory:
 --     http://thread.gmane.org/gmane.comp.lang.haskell.parallel/218
 --
--- Potential implementations roadmap (or we might just stick with this design
--- for this package):
+-- Possibly-similar prior work to look at:
 --
---   - fixed size MutableArray of purely-functional dequeues ("Tako") (fetch-and-add, then CAS)
---       - variant replacing CAS with blocking turn-taking, also play with leap-frogging cache-lines
---       - variant in STM (how to safely do the initial incrCounter at most once though?)
---         would also let us separate read and write buckets.
---   - bounded Tako variant
 --   - maybe implement "Fast Concurrent Queues for x86 Processors" by Morrison & Afek (non-blocking, probably more clever)
 --   - Also looks like a similar (but lockfree, as above) counter-based queue has been developed by FB:
 --       https://github.com/facebook/folly/blob/master/folly/MPMCQueue.h
---   - boxed Unagi variant avoiding CAS with read simply spinning a few times and then calling yield, or something else
 
 
 -- Please just build tests and run:
@@ -196,7 +189,7 @@ executable dev-example
   --ghc-options: -threaded -with-rtsopts=-N2
   --ghc-options: -eventlog
   -- ...or do non-threaded runtime
-  --ghc-prof-options: -fprof-auto
+  ghc-prof-options: -fprof-auto
   --Relevant profiling RTS settings:  -xt
   -- TODO also check out +RTS -A10m, and look at output of -sstderr
 
