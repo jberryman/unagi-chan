@@ -23,6 +23,18 @@ module Control.Concurrent.Chan.Unagi.NoBlocking.Internal
 -- read mechanics removed, the required CAS rendevouz replaced with
 -- writeArray/readArray, and MPSC/SPMC/SPSC variants that eliminate streamHead
 -- updates and atomic operations on any 'S' sides.
+--
+-- TODO:
+--   - Unboxed variant:
+--       The "empty" cell is a magic number (somewhere far from both maxBound
+--       and minBound), and need parallel array segment (actually use a cell
+--       adjacent) used for disambiguating an empty cell from a written cell
+--       that happens to equal magic number. Reader paths:
+--          - read "non-empty" element cell value
+--          - read "empty" valued cell, loadLoadBarrier (necessary?), read signal cell to ensure not magic-valued (and rarely: another barrier and re-read)
+--       Writer paths:
+--          - write to element cell
+--          - if (hopefully) rare magic value, write "written" to signal cell
 
 import Data.IORef
 import Control.Exception
@@ -34,7 +46,6 @@ import Control.Monad
 import Control.Applicative
 import Data.Bits
 import Data.Typeable(Typeable)
-import Control.Concurrent(yield)
 
 import Control.Concurrent.Chan.Unagi.Constants
 import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Types as UT
@@ -190,19 +201,22 @@ tryReadChan (OutChan _ ce) = do  -- NOTE [1]
  -- future segments required (all atomic operations).
 
 
--- | The semantic equivalent to the blocking @readChan@ in the other
--- implementations, this one calls 'tryReadChan', and loops on the 'Element'
--- returned, calling 'yield' at each iteration when the element is not
--- available, and throwing 'BlockedIndefinitelyOnMVar' when 'isActive'
--- determines that a value will never be returned.
-readChan :: OutChan a -> IO a
+-- | @readChan io c@ returns the next element from @c@, calling 'tryReadChan'
+-- and looping on the 'Element' returned, and calling @io@ at each iteration
+-- when the element is not yet available. It throws 'BlockedIndefinitelyOnMVar'
+-- when 'isActive' determines that a value will never be returned.
+--
+-- When used like @readChan 'yield'@ or @readChan ('threadDelay' 10)@ this is
+-- the semantic equivalent to the blocking @readChan@ in the other
+-- implementations.
+readChan :: IO () -> OutChan a -> IO a
 {-# INLINE readChan #-}
-readChan oc = tryReadChan oc >>= \el->
+readChan io oc = tryReadChan oc >>= \el->
     let peekMaybe f = peekElement el >>= maybe f return 
         go = peekMaybe checkAndGo
         checkAndGo = do 
             b <- isActive oc
-            if b then yield >> go
+            if b then io >> go
                  -- Do a necessary final check of the element:
                  else peekMaybe $ throwIO BlockedIndefinitelyOnMVar
      in go

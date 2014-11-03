@@ -10,7 +10,7 @@ import Data.IORef
 import System.Mem(performGC)
 import Data.List(sort)
 
-import Control.Concurrent(forkIO,threadDelay)
+import Control.Concurrent(forkIO,yield,threadDelay)
 import Control.Concurrent.MVar
 import Control.Exception
 import Data.Atomics.Counter.Fat
@@ -166,7 +166,7 @@ checkDeadlocksReaderUnagi times = do
          replicateM_ numPreloaded $ writeChan i (0::Int)
 
          rStart <- newEmptyMVar
-         rid <- forkIO $ (putMVar rStart () >> (forever $ void $ readChan o))
+         rid <- forkIO $ (putMVar rStart () >> (forever $ void $ readChan yield o))
          takeMVar rStart >> threadDelay 1
          throwTo rid ThreadKilled
 
@@ -248,7 +248,7 @@ readChanYieldTest = do
             writeIORef exceptionRaised True
 
     void $ forkIO $ replicateM_ (n+1) $ handling $ do
-        x <- readChan outc
+        x <- readChan yield outc
         modifyIORef' saving (x:)
         when (x == n) $ -- about to do final deadlocking loop:
             putMVar goAhead ()
