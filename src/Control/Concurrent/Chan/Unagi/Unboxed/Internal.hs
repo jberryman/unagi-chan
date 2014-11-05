@@ -75,9 +75,6 @@ newtype ElementArray a = ElementArray (P.MutableByteArray RealWorld)
 --      elements here.
 --       - and what about Storable?
 --     see http://stackoverflow.com/q/4908880/176841
---   - else test combining signal and element arrays into a single one that
---      places signal cell next to element cell, and use Addr to access?
---      (see also TODOs under Stream)
 
 readElementArray :: (P.Prim a)=> ElementArray a -> Int -> IO a
 {-# INLINE readElementArray #-}
@@ -123,7 +120,9 @@ segSource = do
     P.setByteArray sigArr 0 sEGMENT_LENGTH cellEmpty
     return (sigArr, ElementArray eArr)
 
-
+-- NOTE: we tried combining the SignalIntArray and ElementArray into a single
+-- bytearray in the unagi-unboxed-combined-bytearray branch but saw no
+-- significant improvement.
 data Stream a = 
     Stream !SignalIntArray
            !(ElementArray a)
@@ -136,12 +135,6 @@ data Stream a =
   --
   -- [2] new segments are allocated and put here as we go, with threads
   -- cooperating to allocate new segments:
--- TODO 
---   - we could replace Stream with a single funky MutableByteArray, even
---     replacing the IORef with a stored Addr to the next segment, which is
---     initialized to maxBound (an impossible value hopefully?) indicating
---     NoSegment
---      - except for our MVarIndexed in current implementation
 
 data NextSegment a = NoSegment | Next !(Stream a)
 
@@ -177,10 +170,11 @@ writeChan (InChan ce) = \a-> mask_ $ do
     (segIx, (Stream sigArr eArr mvarIndexed next)) <- moveToNextCell ce
     -- NOTE!: must write element before signaling with CAS:
     writeElementArray eArr segIx a
+-- TODO Should we include this for correctness sake? Will GHC ever move a write
+-- ahead of a CAS?:
 #ifdef NOT_x86 
-    -- TODO Should we include this for correctness sake? Will GHC ever move a write ahead of a CAS?
     -- CAS provides a full barrier on x86; otherwise we need to make sure the
-    -- read above occurs before our fetch-and-add:
+    -- element is written before we signal its availability with this CAS:
     writeBarrier
 #endif
     actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellWritten
@@ -204,12 +198,12 @@ readChanOnExceptionUnmasked :: (P.Prim a)=> (IO a -> IO a) -> OutChan a -> IO a
 {-# INLINE readChanOnExceptionUnmasked #-}
 readChanOnExceptionUnmasked h = \(OutChan ce)-> do
     (segIx, (Stream sigArr eArr mvarIndexed _)) <- moveToNextCell ce
-    -- NOTE!: must read signal before reading element. No barrier necessary.
+    -- NOTE!: must read signal before reading element. No barrier necessary.     -- TODO OH REALLY??! REVISIT!
     let readBlocking = inline h $ readMVarIx mvarIndexed segIx -- NOTE [1]
     -- optimistically try read w/out CAS
     sig <- P.readByteArray sigArr segIx
     case (sig :: Int) of
-         1 {- Written -} -> readElementArray eArr segIx
+         1 {- Written -} -> readElementArray eArr segIx                          -- TODO DON'T WE NEED A MATCHING loadLoadBarrier ????
          2 {- Blocking -} -> readBlocking
          _ -> do
             actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellBlocking

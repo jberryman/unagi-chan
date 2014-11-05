@@ -23,18 +23,6 @@ module Control.Concurrent.Chan.Unagi.NoBlocking.Internal
 -- read mechanics removed, the required CAS rendevouz replaced with
 -- writeArray/readArray, and MPSC/SPMC/SPSC variants that eliminate streamHead
 -- updates and atomic operations on any 'S' sides.
---
--- TODO:
---   - Unboxed variant:
---       The "empty" cell is a magic number (somewhere far from both maxBound
---       and minBound), and need parallel array segment (actually use a cell
---       adjacent) used for disambiguating an empty cell from a written cell
---       that happens to equal magic number. Reader paths:
---          - read "non-empty" element cell value
---          - read "empty" valued cell, loadLoadBarrier (necessary?), read signal cell to ensure not magic-valued (and rarely: another barrier and re-read)
---       Writer paths:
---          - write to element cell
---          - if (hopefully) rare magic value, write "written" to signal cell
 
 import Data.IORef
 import Control.Exception
