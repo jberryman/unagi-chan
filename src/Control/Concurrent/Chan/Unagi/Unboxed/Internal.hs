@@ -156,12 +156,10 @@ dupChan :: InChan a -> IO (OutChan a)
 {-# INLINE dupChan #-}
 dupChan (InChan (ChanEnd counter streamHead)) = do
     hLoc <- readIORef streamHead
-    loadLoadBarrier  -- NOTE [1]
+    loadLoadBarrier
     wCount <- readCounter counter
     OutChan <$> (ChanEnd <$> newCounter wCount <*> newIORef hLoc)
-  -- [1] We must read the streamHead before inspecting the counter; otherwise,
-  -- as writers write, the stream head pointer may advance past the cell
-  -- indicated by wCount and the first cell become unreachable.
+
 
 -- | Write a value to the channel.
 writeChan :: (P.Prim a)=> InChan a -> a -> IO ()
@@ -170,54 +168,54 @@ writeChan (InChan ce) = \a-> mask_ $ do
     (segIx, (Stream sigArr eArr mvarIndexed next)) <- moveToNextCell ce
     -- NOTE!: must write element before signaling with CAS:
     writeElementArray eArr segIx a
--- TODO Should we include this for correctness sake? Will GHC ever move a write
--- ahead of a CAS?:
-#ifdef NOT_x86 
-    -- CAS provides a full barrier on x86; otherwise we need to make sure the
-    -- element is written before we signal its availability with this CAS:
-    writeBarrier
-#endif
+    writeBarrier -- NOTE [1]
     actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellWritten
-    -- try to pre-allocate next segment; NOTE [1]
+    -- try to pre-allocate next segment:
     when (segIx == 0) $ void $
       waitingAdvanceStream next 0
     case actuallyWas of
+         -- CAS SUCCEEDED: --
          0 {- Empty -} -> return ()
+         -- CAS FAILED: --
          2 {- Blocking -} -> putMVarIx mvarIndexed segIx a
          1 {- Written -} -> error "Nearly Impossible! Expected Blocking"
          _ -> error "Invalid signal seen in writeChan!"
-  -- [1] the writer which arrives first to the first cell of a new segment is
-  -- tasked (somewhat arbitrarily) with trying to pre-allocate the *next*
-  -- segment hopefully ahead of any readers or writers who might need it. This
-  -- will race with any reader *or* writer that tries to read the next segment
-  -- and finds it's empty (see `waitingAdvanceStream`); when this wins
-  -- (hopefully the vast majority of the time) we avoid a throughput hit.
+  -- [1] CAS provides a full barrier on x86, but we still need to make sure GHC
+  -- maintains our ordering here, such that the element is written before we
+  -- signal its availability with CAS to sigArr that follows. See [2] in
+  -- readChanOnExceptionUnmasked:
 
 
 readChanOnExceptionUnmasked :: (P.Prim a)=> (IO a -> IO a) -> OutChan a -> IO a
 {-# INLINE readChanOnExceptionUnmasked #-}
 readChanOnExceptionUnmasked h = \(OutChan ce)-> do
     (segIx, (Stream sigArr eArr mvarIndexed _)) <- moveToNextCell ce
-    -- NOTE!: must read signal before reading element. No barrier necessary.     -- TODO OH REALLY??! REVISIT!
-    let readBlocking = inline h $ readMVarIx mvarIndexed segIx -- NOTE [1]
+    let readBlocking = inline h $ readMVarIx mvarIndexed segIx    -- NOTE [1]
+        readElem = loadLoadBarrier >> readElementArray eArr segIx -- NOTE [2]
     -- optimistically try read w/out CAS
     sig <- P.readByteArray sigArr segIx
     case (sig :: Int) of
-         1 {- Written -} -> readElementArray eArr segIx                          -- TODO DON'T WE NEED A MATCHING loadLoadBarrier ????
+         1 {- Written -} -> readElem
          2 {- Blocking -} -> readBlocking
-         _ -> do
+         _ -> assert (sig == cellEmpty) $ do
             actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellBlocking
             case actuallyWas of
                  -- succeeded writing Empty; proceed with blocking
                  0 {- Empty -} -> readBlocking
                  -- else in the meantime, writer wrote
-                 1 {- Written -} -> readElementArray eArr segIx
+                 1 {- Written -} -> readElem
                  -- else in the meantime a dupChan reader read, blocking
                  2 {- Blocking -} -> readBlocking
                  _ -> error "Invalid signal seen in readChanOnExceptionUnmasked!"
   -- [1] we must use `readMVarIx` here to support `dupChan`. It's also
   -- important that the behavior of readMVarIx be identical to a readMVar on
   -- the same MVar.
+  --
+  -- [2] We must make sure that we do the readElementArray only after reading
+  -- the sigArr. Even though there is causality here (we inspect 'sig' and then
+  -- maybe do 'readElem') we can't be sure the generated code won't do
+  -- something clever or our processor won't optimistically do the readElem
+  -- anyway (in which case we might get a garbage value). See [1] in writeChan.
 
 
 -- | Read an element from the chan, blocking if the chan is empty.
@@ -250,12 +248,7 @@ moveToNextCell :: (P.Prim a)=> ChanEnd a -> IO (Int, Stream a)
 {-# INLINE moveToNextCell #-}
 moveToNextCell (ChanEnd counter streamHead) = do
     (StreamHead offset0 str0) <- readIORef streamHead
-    -- NOTE [3]
-#ifdef NOT_x86 
-    -- fetch-and-add is a full barrier on x86; otherwise we need to make sure
-    -- the read above occurrs before our fetch-and-add:
     loadLoadBarrier
-#endif
     ix <- incrCounter 1 counter
     let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
                  divMod_sEGMENT_LENGTH $! (ix - offset0)
@@ -263,30 +256,14 @@ moveToNextCell (ChanEnd counter streamHead) = do
         {-# INLINE go #-}
         go 0 str = return str
         go !n (Stream _ _ _ next) =
-            waitingAdvanceStream next (nEW_SEGMENT_WAIT*segIx) -- NOTE [1]
+            waitingAdvanceStream next (nEW_SEGMENT_WAIT*segIx)
               >>= go (n-1)
     str <- go segsAway str0
     when (segsAway > 0) $ do
         let !offsetN = 
               offset0 + (segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH) --(segsAway*sEGMENT_LENGTH)
-        writeIORef streamHead $ StreamHead offsetN str -- NOTE [2]
+        writeIORef streamHead $ StreamHead offsetN str
     return (segIx,str)
-  -- [1] All readers or writers needing to work with a not-yet-created segment
-  -- race to create it, but those past index 0 have progressively long waits; 20
-  -- is chosen as 20 readIORefs should be more than enough time for writer/reader
-  -- 0 to add the new segment (if it's not descheduled).
-  --
-  -- [2] advancing the stream head pointer on segIx == sEGMENT_LENGTH - 1 would
-  -- be more correct, but this is simpler here. This may move the head pointer
-  -- BACKWARDS if the thread was descheduled, but that's not a correctness
-  -- issue.
-  --
-  -- [3] There is a theoretical race condition here: thread reads head and is
-  -- descheduled, meanwhile other readers/writers increment counter one full
-  -- lap; when we increment we think we've found our cell in what is actually a
-  -- very old segment. However in this scenario all addressable memory will
-  -- have been consumed just by the array pointers whivh haven't been able to
-  -- be GC'd. So I don't think this is something to worry about.
 
 
 -- thread-safely try to fill `nextSegRef` at the next offset with a new
