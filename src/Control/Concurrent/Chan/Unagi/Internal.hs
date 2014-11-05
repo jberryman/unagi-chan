@@ -121,7 +121,8 @@ dupChan (InChan _ (ChanEnd segSource counter streamHead)) = do
     return $ OutChan (ChanEnd segSource counter' streamHead')
   -- [1] We must read the streamHead before inspecting the counter; otherwise,
   -- as writers write, the stream head pointer may advance past the cell
-  -- indicated by wCount.
+  -- indicated by wCount. For the corresponding store-store barrier see [*] in
+  -- moveToNextCell
 
 -- | Write a value to the channel.
 writeChan :: InChan a -> a -> IO ()
@@ -214,13 +215,11 @@ readChanOnException c h = mask_ $
 moveToNextCell :: ChanEnd a -> IO (Int, Stream a)
 {-# INLINE moveToNextCell #-}
 moveToNextCell (ChanEnd segSource counter streamHead) = do
-    (StreamHead offset0 str0) <- readIORef streamHead
     -- NOTE [3]
-#ifdef NOT_x86 
-    -- fetch-and-add is a full barrier on x86; otherwise we need to make sure
-    -- the read above occurrs before our fetch-and-add:
-    loadLoadBarrier
-#endif
+    (StreamHead offset0 str0) <- readIORef streamHead
+    -- fetch-and-add is a full barrier on x86; but we want to make sure GHC
+    -- doesn't move the read above ahead of our incrCounter below, so:
+    loadLoadBarrier  -- [*]
     ix <- incrCounter 1 counter
     let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
                  divMod_sEGMENT_LENGTH $! (ix - offset0)
@@ -234,6 +233,9 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
     when (segsAway > 0) $ do
         let !offsetN = 
               offset0 + (segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH) --(segsAway*sEGMENT_LENGTH)
+        -- [*] incrCounter is logically both an atomic read/write combined. We
+        -- need to ensure the following write occurs after the "write" of the
+        -- incrCounter, and we get that with causality from the "read" part
         writeIORef streamHead $ StreamHead offsetN str -- NOTE [2]
     return (segIx,str)
   -- [1] All readers or writers needing to work with a not-yet-created segment
@@ -250,7 +252,7 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
   -- descheduled, meanwhile other readers/writers increment counter one full
   -- lap; when we increment we think we've found our cell in what is actually a
   -- very old segment. However in this scenario all addressable memory will
-  -- have been consumed just by the array pointers whivh haven't been able to
+  -- have been consumed just by the array pointers which haven't been able to
   -- be GC'd. So I don't think this is something to worry about.
 
 

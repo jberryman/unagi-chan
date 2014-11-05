@@ -12,3 +12,7 @@
 
 - conditionally use tryReadMVar (as before) when GHC >= 7.8.3
 - set proper CPP flags when running tests
+
+### 0.3.0.0
+
+- be more conservative/correct with memory barriers, and document them better
