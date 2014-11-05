@@ -103,7 +103,7 @@ newChanStarting !startingCellOffset = do
     finalizee <- newIORef True
     void $ mkWeakIORef inHeadRef $ do -- NOTE [1]
         -- make sure the array writes of any final writeChans occur before the
-        -- following writeIORef:
+        -- following writeIORef. See isActive [*]:
         writeBarrier
         writeIORef finalizee False
     (,) (InChan finalizee inEnd) <$> (OutChan finalizee <$> end)
@@ -121,12 +121,9 @@ newChanStarting !startingCellOffset = do
 isActive :: OutChan a -> IO Bool
 isActive (OutChan finalizee _) = do
     b <- readIORef finalizee
-    -- make sure that a peekElement that follows is not moved ahead:
-    loadLoadBarrier 
+    -- [*] make sure that any peekElement that follows is not moved ahead:
+    loadLoadBarrier
     return b
-
--- TODO make a note here about our new 'stream' function :: OutChan a -> Stream a
--- TODO also implement a 'streamN' :: Int -> [Stream a]
 
 -- | Duplicate a chan: the returned @OutChan@ begins empty, but data written to
 -- the argument @InChan@ from then on will be available from both the original
@@ -285,11 +282,7 @@ moveToNextCell :: ChanEnd a -> IO (Int, Stream a, IO ())
 {-# INLINE moveToNextCell #-}
 moveToNextCell (ChanEnd segSource counter streamHead) = do
     (StreamHead offset0 str0) <- readIORef streamHead
-#ifdef NOT_x86 
-    -- fetch-and-add is a full barrier on x86; otherwise we need to make sure
-    -- the read above occurrs before our fetch-and-add:
     loadLoadBarrier
-#endif
     ix <- incrCounter 1 counter
     let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
                  divMod_sEGMENT_LENGTH $! (ix - offset0)
