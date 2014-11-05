@@ -160,15 +160,12 @@ dupChan :: InChan a -> IO (OutChan a)
 {-# INLINE dupChan #-}
 dupChan (InChan _ _ (ChanEnd logBounds boundsMn1 segSource counter streamHead)) = do
     hLoc <- readIORef streamHead
-    loadLoadBarrier  -- NOTE [1]
+    loadLoadBarrier
     wCount <- readCounter counter
     
     counter' <- newCounter wCount 
     streamHead' <- newIORef hLoc
     return $ OutChan $ ChanEnd logBounds boundsMn1 segSource counter' streamHead'
-  -- [1] We must read the streamHead before inspecting the counter; otherwise,
-  -- as writers write, the stream head pointer may advance past the cell
-  -- indicated by wCount.
 
 
 -- | Write a value to the channel. If the chan is full this will block.
@@ -197,11 +194,11 @@ writeChanWithBlocking canBlock (InChan _ savedEmptyTkt ce) a = mask_ $ do
     if success
       -- NOTE: We must only block AFTER writing to be async exception-safe.
       then maybe updateStreamHeadIfNecessary -- NOTE [2]
-                 ( \checkpt-> do
-                     unlocked <- if canBlock 
-                                   then True <$ writerCheckin checkpt
-                                   else tryWriterCheckin checkpt
-                     when unlocked $
+                 (\checkpt-> do
+                     segUnlocked <- if canBlock 
+                                     then True <$ writerCheckin checkpt
+                                     else tryWriterCheckin checkpt
+                     when segUnlocked $
                        updateStreamHeadIfNecessary ) -- NOTE [1/2]
                  maybeCheckpt
                         
@@ -309,10 +306,7 @@ moveToNextCell :: Bool -> ChanEnd a -> IO (Int, NextSegment a, IO ())
 {-# INLINE moveToNextCell #-}
 moveToNextCell isReader (ChanEnd logBounds boundsMn1 segSource counter streamHead) = do
     (StreamHead offset0 str0) <- readIORef streamHead
-#ifdef NOT_x86 
-    -- fetch-and-add is a full barrier on x86
     loadLoadBarrier
-#endif
     ix <- incrCounter 1 counter
     let !relIx = ix - offset0
         !segsAway = relIx `unsafeShiftR` logBounds -- `div` bounds
@@ -380,10 +374,11 @@ waitingAdvanceStream isReader nextSegRef segSource = go where
   go wait = assert (wait >= 0) $ do
     tk <- readForCAS nextSegRef
     case peekTicket tk of
-         -- Rare, slow path: In readers, we outran reader 0 of the previous
-         -- segment (or it was descheduled) who was tasked with setting this up
-         -- In writers, there are number writer threads > bounds, or reader 0
-         -- of previous segment was slow or descheduled.
+         -- Rare, slow path: 
+         --   In readers: we outran reader 0 of the previous segment (or it was
+         --  descheduled) who was tasked with setting this up.
+         --   In writers: there are number writer threads > bounds, or reader 0
+         --  of previous segment was slow or descheduled.
          Nothing 
            | wait > 0 -> go (wait - 1)
              -- Create a potential next segment and try to insert it:
@@ -394,11 +389,8 @@ waitingAdvanceStream isReader nextSegRef segSource = go where
                    -- This may fail because of either a competing reader or
                    -- writer which certainly modified this to a Just value
                    installed <- cas tk $ NextByReader potentialStrNext
-#ifdef NOT_x86 
-                   -- ensure strNext is in place before unblocking writers,
-                   -- where CAS is not a full barrier:
-                   writeBarrier
-#endif
+                   -- The segment we're reading from (or any *behind* the one
+                   -- we're reading from) is always unblocked for writers:
                    readerUnblockAndReturn $ peekInstalled installed
                  else do
                    potentialCheckpt <- WriterCheckpoint <$> newEmptyMVar
@@ -446,26 +438,17 @@ writerCheckin (WriterCheckpoint v) = do
 #else
     void $ readMVar v
 #endif
-    -- make sure we can see the reader's segment creation once we unblock...
-    loadLoadBarrier
-    -- ... and proceed to readIORef the segment
 
 -- returns immediately indicating whether the checkpt is currently unblocked.
 tryWriterCheckin :: WriterCheckpoint -> IO Bool
-tryWriterCheckin (WriterCheckpoint v) = do
+tryWriterCheckin (WriterCheckpoint v) =
 -- On GHC > 7.8 we have an atomic `tryReadMVar`.  On earlier GHC readMVar is
 -- take+put, creating a race condition; in this case we use take+tryPut
 -- ensuring the MVar stays full even if a reader's tryPut slips an () in.
 -- HOWEVER, tryReadMVar is also buggy in GHC < 7.8.3
 --   https://ghc.haskell.org/trac/ghc/ticket/9148
-    unblocked <- 
 #ifdef TRYREADMVAR
-      isJust <$> tryReadMVar v
+    isJust <$> tryReadMVar v
 #else
-      tryTakeMVar v >>= maybe (return False) ((True <$) . tryPutMVar v)
+    tryTakeMVar v >>= maybe (return False) ((True <$) . tryPutMVar v)
 #endif
-    -- make sure we can see the reader's segment creation once we unblock...
-    loadLoadBarrier
-    return unblocked
-    -- ... and proceed to readIORef the segment
-
