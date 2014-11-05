@@ -79,6 +79,10 @@ library
     cpp-options: -DTRYREADMVAR
   
 -- TODO
+--  - For GHC 7.10+
+--     - look at small arrays (w/out card-marking)
+--     - re-benchmark array creation and adjust next segment wait
+--     - if we get clarity on whether atomic ops are barriers then we may be able to remove some of our explicit barriers
 --  - Do a benchmark of multiple queues running in parallel, to see if we are
 --     affected by global allocator issues with pinned memory:
 --     http://thread.gmane.org/gmane.comp.lang.haskell.parallel/218
