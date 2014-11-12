@@ -306,7 +306,6 @@ moveToNextCell :: Bool -> ChanEnd a -> IO (Int, NextSegment a, IO ())
 {-# INLINE moveToNextCell #-}
 moveToNextCell isReader (ChanEnd logBounds boundsMn1 segSource counter streamHead) = do
     (StreamHead offset0 str0) <- readIORef streamHead
-    loadLoadBarrier
     ix <- incrCounter 1 counter
     let !relIx = ix - offset0
         !segsAway = relIx `unsafeShiftR` logBounds -- `div` bounds
