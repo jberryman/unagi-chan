@@ -121,7 +121,8 @@ newChanStarting !startingCellOffset = do
 isActive :: OutChan a -> IO Bool
 isActive (OutChan finalizee _) = do
     b <- readIORef finalizee
-    -- [*] make sure that any peekElement that follows is not moved ahead:
+    -- make sure that any peekElement that follows is not moved ahead. See
+    -- newChanStarting [*]:
     loadLoadBarrier
     return b
 
@@ -282,7 +283,6 @@ moveToNextCell :: ChanEnd a -> IO (Int, Stream a, IO ())
 {-# INLINE moveToNextCell #-}
 moveToNextCell (ChanEnd segSource counter streamHead) = do
     (StreamHead offset0 str0) <- readIORef streamHead
-    loadLoadBarrier
     ix <- incrCounter 1 counter
     let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
                  divMod_sEGMENT_LENGTH $! (ix - offset0)

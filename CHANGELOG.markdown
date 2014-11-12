@@ -15,4 +15,4 @@
 
 ### 0.3.0.0
 
-- be more conservative/correct with memory barriers, and document them better
+- revisit memory barriers in light of https://github.com/rrnewton/haskell-lockfree/issues/39, and document them better

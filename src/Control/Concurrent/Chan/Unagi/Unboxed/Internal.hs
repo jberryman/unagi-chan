@@ -168,8 +168,7 @@ writeChan (InChan ce) = \a-> mask_ $ do
     (segIx, (Stream sigArr eArr mvarIndexed next)) <- moveToNextCell ce
     -- NOTE!: must write element before signaling with CAS:
     writeElementArray eArr segIx a
-    writeBarrier -- NOTE [1]
-    actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellWritten
+    actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellWritten -- NOTE[1]
     -- try to pre-allocate next segment:
     when (segIx == 0) $ void $
       waitingAdvanceStream next 0
@@ -180,9 +179,9 @@ writeChan (InChan ce) = \a-> mask_ $ do
          2 {- Blocking -} -> putMVarIx mvarIndexed segIx a
          1 {- Written -} -> error "Nearly Impossible! Expected Blocking"
          _ -> error "Invalid signal seen in writeChan!"
-  -- [1] CAS provides a full barrier on x86, but we still need to make sure GHC
-  -- maintains our ordering here, such that the element is written before we
-  -- signal its availability with CAS to sigArr that follows. See [2] in
+  -- [1] casByteArrayInt provides the write barrier we need here to make sure
+  -- GHC maintains our ordering such that the element is written before we
+  -- signal its availability with the CAS to sigArr that follows. See [2] in
   -- readChanOnExceptionUnmasked:
 
 
@@ -191,13 +190,14 @@ readChanOnExceptionUnmasked :: (P.Prim a)=> (IO a -> IO a) -> OutChan a -> IO a
 readChanOnExceptionUnmasked h = \(OutChan ce)-> do
     (segIx, (Stream sigArr eArr mvarIndexed _)) <- moveToNextCell ce
     let readBlocking = inline h $ readMVarIx mvarIndexed segIx    -- NOTE [1]
-        readElem = loadLoadBarrier >> readElementArray eArr segIx -- NOTE [2]
+        readElem = readElementArray eArr segIx
     -- optimistically try read w/out CAS
     sig <- P.readByteArray sigArr segIx
     case (sig :: Int) of
-         1 {- Written -} -> readElem
+         1 {- Written -} -> loadLoadBarrier >> readElem -- NOTE [2]
          2 {- Blocking -} -> readBlocking
          _ -> assert (sig == cellEmpty) $ do
+            -- casByteArrayInt is a full barrier:
             actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellBlocking
             case actuallyWas of
                  -- succeeded writing Empty; proceed with blocking
@@ -248,7 +248,6 @@ moveToNextCell :: (P.Prim a)=> ChanEnd a -> IO (Int, Stream a)
 {-# INLINE moveToNextCell #-}
 moveToNextCell (ChanEnd counter streamHead) = do
     (StreamHead offset0 str0) <- readIORef streamHead
-    loadLoadBarrier
     ix <- incrCounter 1 counter
     let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
                  divMod_sEGMENT_LENGTH $! (ix - offset0)

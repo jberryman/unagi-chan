@@ -215,12 +215,9 @@ readChanOnException c h = mask_ $
 moveToNextCell :: ChanEnd a -> IO (Int, Stream a)
 {-# INLINE moveToNextCell #-}
 moveToNextCell (ChanEnd segSource counter streamHead) = do
-    -- NOTE [3]
     (StreamHead offset0 str0) <- readIORef streamHead
-    -- fetch-and-add is a full barrier on x86; but we want to make sure GHC
-    -- doesn't move the read above ahead of our incrCounter below, so:
-    loadLoadBarrier  -- [*]
-    ix <- incrCounter 1 counter
+    -- NOTE [3/4]
+    ix <- incrCounter 1 counter  -- [*]
     let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
                  divMod_sEGMENT_LENGTH $! (ix - offset0)
               -- (ix - offset0) `quotRem` sEGMENT_LENGTH
@@ -254,6 +251,11 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
   -- very old segment. However in this scenario all addressable memory will
   -- have been consumed just by the array pointers which haven't been able to
   -- be GC'd. So I don't think this is something to worry about.
+  --
+  -- [4] We must ensure the read above doesn't move ahead of our incrCounter
+  -- below. But fetchAddByteArrayInt is meant to be a full barrier (for
+  -- compiler and processor) across architectures, so no explicit barrier is
+  -- needed here.
 
 
 -- thread-safely try to fill `nextSegRef` at the next offset with a new
