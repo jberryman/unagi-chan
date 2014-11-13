@@ -333,16 +333,3 @@ newSegmentSource :: IO (SegSource a)
 newSegmentSource = do
     arr <- P.newArray sEGMENT_LENGTH Nothing
     return (P.cloneMutableArray arr 0 sEGMENT_LENGTH)
-
--- ----------
--- CELLS AND GC:
---
---   Each cell in a segment is assigned at most one reader and one writer
---
---   When all readers disappear and writers continue we'll have at most one
---   segment-worth of garbage that can't be collected at a time; when writers
---   advance the head segment pointer, the previous may be GC'd.
---
---   Readers blocked indefinitely should eventually raise a
---   BlockedIndefinitelyOnMVar.
--- ----------
