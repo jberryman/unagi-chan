@@ -15,7 +15,7 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
 -- Forked from src/Control/Concurrent/Chan/Unagi/Internal.hs at 443465. See
 -- that implementation for additional details and notes which we omit here.
 --
--- Internals exposed for testing.
+-- Internals exposed for testing and for re-use in Unagi.NoBlocking.Unboxed
 --
 -- TODO 
 --   - Look at how ByteString is implemented; maybe that approach with
@@ -127,7 +127,7 @@ data Stream a =
     Stream !SignalIntArray
            !(ElementArray a)
            -- For coordinating blocking between reader/writer; NOTE [1]
-           !(IndexedMVar a)
+           (IndexedMVar a) -- N.B. must remain non-strict for NoBlocking.Unboxed
            -- The next segment in the stream; NOTE [2] 
            !(IORef (NextSegment a))
   -- [1] An important property: we can switch out this implementation as long
@@ -165,7 +165,8 @@ dupChan (InChan (ChanEnd counter streamHead)) = do
 writeChan :: (P.Prim a)=> InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
 writeChan (InChan ce) = \a-> mask_ $ do 
-    (segIx, (Stream sigArr eArr mvarIndexed next)) <- moveToNextCell ce
+    (segIx, (Stream sigArr eArr mvarIndexed next), maybeUpdateStreamHead) <- moveToNextCell ce
+    maybeUpdateStreamHead
     -- NOTE!: must write element before signaling with CAS:
     writeElementArray eArr segIx a
     actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellWritten -- NOTE[1]
@@ -188,7 +189,8 @@ writeChan (InChan ce) = \a-> mask_ $ do
 readChanOnExceptionUnmasked :: (P.Prim a)=> (IO a -> IO a) -> OutChan a -> IO a
 {-# INLINE readChanOnExceptionUnmasked #-}
 readChanOnExceptionUnmasked h = \(OutChan ce)-> do
-    (segIx, (Stream sigArr eArr mvarIndexed _)) <- moveToNextCell ce
+    (segIx, (Stream sigArr eArr mvarIndexed _), maybeUpdateStreamHead) <- moveToNextCell ce
+    maybeUpdateStreamHead
     let readBlocking = inline h $ readMVarIx mvarIndexed segIx    -- NOTE [1]
         readElem = readElementArray eArr segIx
     -- optimistically try read w/out CAS
@@ -241,10 +243,12 @@ readChanOnException :: (P.Prim a)=> OutChan a -> (IO a -> IO ()) -> IO a
 readChanOnException c h = mask_ $ 
     readChanOnExceptionUnmasked (\io-> io `onException` (h io)) c
 
+
+
 -- increments counter, finds stream segment of corresponding cell (updating the
 -- stream head pointer as needed), and returns the stream segment and relative
 -- index of our cell.
-moveToNextCell :: (P.Prim a)=> ChanEnd a -> IO (Int, Stream a)
+moveToNextCell :: (P.Prim a)=> ChanEnd a -> IO (Int, Stream a, IO ())
 {-# INLINE moveToNextCell #-}
 moveToNextCell (ChanEnd counter streamHead) = do
     (StreamHead offset0 str0) <- readIORef streamHead
@@ -258,11 +262,15 @@ moveToNextCell (ChanEnd counter streamHead) = do
             waitingAdvanceStream next (nEW_SEGMENT_WAIT*segIx)
               >>= go (n-1)
     str <- go segsAway str0
-    when (segsAway > 0) $ do
-        let !offsetN = 
-              offset0 + (segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH) --(segsAway*sEGMENT_LENGTH)
-        writeIORef streamHead $ StreamHead offsetN str
-    return (segIx,str)
+    -- We need to return this continuation here for NoBlocking.Unboxed, which
+    -- needs to perform this action at different points in the reader and
+    -- writer.
+    let !maybeUpdateStreamHead = 
+          when (segsAway > 0) $ do
+            let !offsetN = 
+                  offset0 + (segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH) --(segsAway*sEGMENT_LENGTH)
+            writeIORef streamHead $ StreamHead offsetN str
+    return (segIx,str, maybeUpdateStreamHead)
 
 
 -- thread-safely try to fill `nextSegRef` at the next offset with a new
