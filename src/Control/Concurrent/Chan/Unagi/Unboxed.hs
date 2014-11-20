@@ -38,7 +38,7 @@ newChan = newChanStarting (maxBound - 10)
 
 -- | Return a lazy list representing the contents of the supplied OutChan, much
 -- like System.IO.hGetContents.
-getChanContents :: Prim a=> OutChan a -> IO [a]
+getChanContents :: (Eq a, Prim a)=> OutChan a -> IO [a]
 getChanContents ch = unsafeInterleaveIO (do
                             x  <- readChan ch
                             xs <- getChanContents ch

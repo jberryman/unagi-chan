@@ -116,6 +116,13 @@ cellWritten  = 1
 cellBlocking = 2
 
 
+-- TODO: we'd like this to be as fast as possible. copyByteArray of a global
+-- byte array for sigArr, could be possible; or using Addr (like bytestring)
+-- and allocating/setting sigArr and eArr as a contiguous region (with
+-- cellEmpty now equal to 0xDADADADA...); or finally we could have a global
+-- 1024-byte array of magic which we copy for sigArr and `*sizeOf a` for eArr.
+-- My attempts at doing the Unagi-style storing of segSource producer in
+-- ChanEnd incurred ~10% slowdown I couldn't figure out how to avoid.
 segSource :: forall a. (P.Prim a)=> IO (SignalIntArray, ElementArray a) --ScopedTypeVariables
 {-# INLINE segSource #-}
 segSource = do
@@ -199,38 +206,33 @@ writeChan (InChan ce) = \a-> mask_ $ do
   -- readChanOnExceptionUnmasked:
 
 
-readChanOnExceptionUnmasked :: (P.Prim a)=> (IO a -> IO a) -> OutChan a -> IO a
+-- TODO This Eq constraint here and below is obnoxious...
+readChanOnExceptionUnmasked :: (Eq a, P.Prim a)=> (IO a -> IO a) -> OutChan a -> IO a
 {-# INLINE readChanOnExceptionUnmasked #-}
-readChanOnExceptionUnmasked h = \(OutChan ce)-> do
+readChanOnExceptionUnmasked h = \(OutChan ce@(ChanEnd magic _ _))-> do
     (segIx, (Stream sigArr eArr mvarIndexed _), maybeUpdateStreamHead) <- moveToNextCell ce
     maybeUpdateStreamHead
     let readBlocking = inline h $ readMVarIx mvarIndexed segIx    -- NOTE [1]
         readElem = readElementArray eArr segIx
-    -- optimistically try read w/out CAS
-    sig <- P.readByteArray sigArr segIx
-    case (sig :: Int) of
-         1 {- Written -} -> loadLoadBarrier >> readElem -- NOTE [2]
-         2 {- Blocking -} -> readBlocking
-         _ -> assert (sig == cellEmpty) $ do
-            -- casByteArrayInt is a full barrier:
-            actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellBlocking
-            case actuallyWas of
-                 -- succeeded writing Empty; proceed with blocking
-                 0 {- Empty -} -> readBlocking
-                 -- else in the meantime, writer wrote
-                 1 {- Written -} -> readElem
-                 -- else in the meantime a dupChan reader read, blocking
-                 2 {- Blocking -} -> readBlocking
-                 _ -> error "Invalid signal seen in readChanOnExceptionUnmasked!"
+    -- TODO ADD CHECK FOR SIZEoF > WORD SIZE HERE; currently only works for Int
+    el <- readElem
+    if (el /= magic) 
+      -- We know `el` was atomically written:
+      then return el
+      else do
+        -- Assume probably blocking (Note: casByteArrayInt is a full barrier)
+        actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellBlocking
+        case actuallyWas of
+             -- succeeded writing Empty; proceed with blocking
+             0 {- Empty -} -> readBlocking
+             -- else in the meantime, writer wrote
+             1 {- Written -} -> readElem
+             -- else in the meantime a dupChan reader read, blocking
+             2 {- Blocking -} -> readBlocking
+             _ -> error "Invalid signal seen in readChanOnExceptionUnmasked!"
   -- [1] we must use `readMVarIx` here to support `dupChan`. It's also
   -- important that the behavior of readMVarIx be identical to a readMVar on
   -- the same MVar.
-  --
-  -- [2] We must make sure that we do the readElementArray only after reading
-  -- the sigArr. Even though there is causality here (we inspect 'sig' and then
-  -- maybe do 'readElem') we can't be sure the generated code won't do
-  -- something clever or our processor won't optimistically do the readElem
-  -- anyway (in which case we might get a garbage value). See [1] in writeChan.
 
 
 -- | Read an element from the chan, blocking if the chan is empty.
@@ -239,7 +241,7 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
 -- the message that the read would have returned is likely to be lost, even when
 -- the read is known to be blocked on an empty queue. If you need to handle
 -- this scenario, you can use 'readChanOnException'.
-readChan :: (P.Prim a)=> OutChan a -> IO a
+readChan :: (Eq a, P.Prim a)=> OutChan a -> IO a
 {-# INLINE readChan #-}
 readChan = readChanOnExceptionUnmasked id
 
@@ -251,7 +253,7 @@ readChan = readChanOnExceptionUnmasked id
 -- The second argument is a handler that takes a blocking IO action returning
 -- the element, and performs some recovery action.  When the handler is called,
 -- the passed @IO a@ is the only way to access the element.
-readChanOnException :: (P.Prim a)=> OutChan a -> (IO a -> IO ()) -> IO a
+readChanOnException :: (Eq a, P.Prim a)=> OutChan a -> (IO a -> IO ()) -> IO a
 {-# INLINE readChanOnException #-}
 readChanOnException c h = mask_ $ 
     readChanOnExceptionUnmasked (\io-> io `onException` (h io)) c
