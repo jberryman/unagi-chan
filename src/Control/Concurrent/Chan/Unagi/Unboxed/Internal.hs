@@ -48,18 +48,27 @@ newtype OutChan a = OutChan (ChanEnd a)
     deriving Typeable
 
 instance Eq (InChan a) where
-    (InChan (ChanEnd _ headA)) == (InChan (ChanEnd _ headB))
+    (InChan (ChanEnd _ _ headA)) == (InChan (ChanEnd _ _ headB))
         = headA == headB
 instance Eq (OutChan a) where
-    (OutChan (ChanEnd _ headA)) == (OutChan (ChanEnd _ headB))
+    (OutChan (ChanEnd _ _ headA)) == (OutChan (ChanEnd _ _ headB))
         = headA == headB
 
+-- The magic value we initialize our ElementArray with. When we're dealing with
+-- objects word-sized or smaller (for atomicity) the reader can return with its
+-- element after only inspecting the ElementArray when the value it reads does
+-- not equal the magic value.
+type Magic a = a
 
 -- InChan & OutChan are mostly identical, sharing a stream, but with
 -- independent counters
 data ChanEnd a = 
+            -- the value we initialize our ElementArray with. We only need this
+            -- in read here, but will use it on the write side in other
+            -- implementations:
+   ChanEnd  !(Magic a)
             -- Both Chan ends must start with the same counter value.
-    ChanEnd !AtomicCounter 
+            !AtomicCounter 
             -- the stream head; this must never point to a segment whose offset
             -- is greater than the counter value
             !(IORef (StreamHead a))
@@ -110,14 +119,16 @@ cellBlocking = 2
 segSource :: forall a. (P.Prim a)=> IO (SignalIntArray, ElementArray a) --ScopedTypeVariables
 {-# INLINE segSource #-}
 segSource = do
+    let eBytes = P.sizeOf (undefined :: a) `unsafeShiftL` lOG_SEGMENT_LENGTH
     -- A largish pinned array seems like it would be the best choice here.
     sigArr <- P.newAlignedPinnedByteArray 
                 (P.sizeOf    cellEmpty `unsafeShiftL` lOG_SEGMENT_LENGTH) -- times sEGMENT_LENGTH
                 (P.alignment cellEmpty)
     eArr <- P.newAlignedPinnedByteArray 
-                (P.sizeOf    (undefined :: a) `unsafeShiftL` lOG_SEGMENT_LENGTH)
+                eBytes
                 (P.alignment (undefined :: a))
     P.setByteArray sigArr 0 sEGMENT_LENGTH cellEmpty
+    P.fillByteArray eArr 0 eBytes 0xDA -- why not an anti-programming mvt?
     return (sigArr, ElementArray eArr)
 
 -- NOTE: we tried combining the SignalIntArray and ElementArray into a single
@@ -142,8 +153,10 @@ data NextSegment a = NoSegment | Next !(Stream a)
 newChanStarting :: (P.Prim a)=> Int -> IO (InChan a, OutChan a)
 {-# INLINE newChanStarting #-}
 newChanStarting !startingCellOffset = do
-    stream <- uncurry Stream <$> segSource <*> newIndexedMVar <*> newIORef NoSegment
-    let end = ChanEnd
+    (sigArr0,eArr0@(ElementArray eArr0')) <- segSource
+    magic <- P.readByteArray eArr0' 0
+    stream <- Stream sigArr0 eArr0 <$> newIndexedMVar <*> newIORef NoSegment
+    let end = ChanEnd magic
                   <$> newCounter (startingCellOffset - 1)
                   <*> newIORef (StreamHead startingCellOffset stream)
     liftA2 (,) (InChan <$> end) (OutChan <$> end)
@@ -154,11 +167,11 @@ newChanStarting !startingCellOffset = do
 -- @OutChan@ and the one returned here, creating a kind of broadcast channel.
 dupChan :: InChan a -> IO (OutChan a)
 {-# INLINE dupChan #-}
-dupChan (InChan (ChanEnd counter streamHead)) = do
+dupChan (InChan (ChanEnd magic counter streamHead)) = do
     hLoc <- readIORef streamHead
     loadLoadBarrier
     wCount <- readCounter counter
-    OutChan <$> (ChanEnd <$> newCounter wCount <*> newIORef hLoc)
+    OutChan <$> (ChanEnd magic <$> newCounter wCount <*> newIORef hLoc)
 
 
 -- | Write a value to the channel.
@@ -250,7 +263,7 @@ readChanOnException c h = mask_ $
 -- index of our cell.
 moveToNextCell :: (P.Prim a)=> ChanEnd a -> IO (Int, Stream a, IO ())
 {-# INLINE moveToNextCell #-}
-moveToNextCell (ChanEnd counter streamHead) = do
+moveToNextCell (ChanEnd magic counter streamHead) = do
     (StreamHead offset0 str0) <- readIORef streamHead
     ix <- incrCounter 1 counter
     let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
