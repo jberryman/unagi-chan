@@ -17,11 +17,48 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
 --
 -- Internals exposed for testing and for re-use in Unagi.NoBlocking.Unboxed
 --
--- TODO 
---   - Look at how ByteString is implemented; maybe that approach with
---     ForeignPtr is better in some ways, or perhaps we can use their Internals?
---       - we can make IndexedMVar () and always write to ByteString
---       - Also 'vector' lib
+-- TODO integration w/ ByteString
+--       - we'd need to make IndexedMVar () and always write to ByteString
+--       - we'd need to switch to Storable probably.
+--       - exporting slices of elements as ByteString 
+--         - lazy bytestring would be easiest because of segment boundaries
+--         - might be tricky to do blocking checking efficiently
+--       - writing bytearrays
+--         - fast with memcpy
+--
+-- TODO post allocation tests:
+--       - move the copying code into no-blocking-variant-unboxed-2-copyMutableByteArray
+--       - play with NOINLINE etc on all slow path code. Look at conditionals and case
+--         - also consider not unboxing (and moving to back) data involved in that slow path
+--       - time using Addr for writes and reads
+--       - test waiting longer to pre-allocate (so it stays in cache?)
+--       - Use a small sigArr (like a bitmap) 
+--         - maybe even do something clever with fetch-and-add rather than CAS,
+--            with different values being added to twiddle different parts of bit range
+--         - for no-blocking variant, we could make size == smallest atomic write size
+--            and that would give us a 4x smaller array if we wanted to re-use
+--            that sizing everywhere
+--       - use ghc-events-analyze for god's sake!:  http://www.well-typed.com/blog/86/
+--       - restructuring:
+--         - replace IORef with an unboxed 1-element array holding Addr of MutableByteArray? or something...
+--         - nullPtr can be used to get us references of (Maybe a)
+--            > IORef (StreamHead                                 )
+--            >       Int + (Stream                               )
+--            >             arr + arr + IndexedMvar + Maybe Stream
+--           - We would need to move IndexedMvar into streamhead
+--              - probably better structure anyway; try boxed and !unboxed
+--           - we could even keep around IndexedMvar for longer to avoid many
+--              mutable references, and overhead of creation. (based on size?)
+--
+-- TODO GHC 7.10 or someday:
+--       - calloc for mutableByteArray, when/if available
+--       - non-temporal writes that bypass the cache? See: http://lwn.net/Articles/255364/
+--       - SIMD stuff for batch writing, or zeroing, etc. etc
+--
+-- TODO TESTS:
+--   - Magic value equality for all fields of array, with stored magic value, for many different Prim a
+--   - All tests with different Prim a (both > and < sizeOf Word)
+--   - word-overlapping atomic thread-safe writes of size < 1 word (see other Unboxed)
 
 
 import Data.IORef
@@ -131,12 +168,27 @@ segSource = do
     sigArr <- P.newAlignedPinnedByteArray 
                 (P.sizeOf    cellEmpty `unsafeShiftL` lOG_SEGMENT_LENGTH) -- times sEGMENT_LENGTH
                 (P.alignment cellEmpty)
+    -- NOTE: we need these to be aligned to (some multiple of) Word boundaries
+    -- for magic trick to be correct, and for assumptions about atomicity of
+    -- loads/stores to hold!
     eArr <- P.newAlignedPinnedByteArray 
                 eBytes
                 (P.alignment (undefined :: a))
     P.setByteArray sigArr 0 sEGMENT_LENGTH cellEmpty
     P.fillByteArray eArr 0 eBytes 0xDA -- why not an anti-programming mvt?
     return (sigArr, ElementArray eArr)
+
+{-
+-- | Our class of types supporting primitive array operations
+class (Prim a, Eq a)=> UnagiPrim a where
+    -- | 
+    writeIsAtomic :: a -> Bool
+    writeIsAtomic = False
+
+    -- TODO or maybe make atomicUnicorn :: Maybe a   ...  LOL
+    unicorn :: a
+    unicorn = error "We tried to use the unicorn value when writeIsAtomic == False"  -- TODO not a great solution
+    -}
 
 -- NOTE: we tried combining the SignalIntArray and ElementArray into a single
 -- bytearray in the unagi-unboxed-combined-bytearray branch but saw no
@@ -198,12 +250,52 @@ writeChan (InChan ce) = \a-> mask_ $ do
          0 {- Empty -} -> return ()
          -- CAS FAILED: --
          2 {- Blocking -} -> putMVarIx mvarIndexed segIx a
+
          1 {- Written -} -> error "Nearly Impossible! Expected Blocking"
          _ -> error "Invalid signal seen in writeChan!"
   -- [1] casByteArrayInt provides the write barrier we need here to make sure
   -- GHC maintains our ordering such that the element is written before we
   -- signal its availability with the CAS to sigArr that follows. See [2] in
   -- readChanOnExceptionUnmasked:
+
+
+-- TODO
+--     - make magic correct
+--       - FUUUUCK but a user could define one of < Word but that is non-atomic!!
+--     - play with optimizing segSource
+--       - copying
+--       - different alignments, non-pinned, etc.
+--       - use Storable instead.
+--
+-- FOREIGN, ETC NOTES:
+--   - ByteString/Vector use ForeignPtr which is pinned aligned.
+--   - No CAS for Ptr/ForeignPtr but we can probably extract the mutablebytearray for CAS
+--     - Data.Primitive.ByteArray.mutableByteArrayContents ~> Addr
+--       , and ForeignPtr holds an Addr# + MutableByteArray internally...
+--       , use GHC.ForeignPtr and wrap MutableByteArray in PlainPtr and off to races
+--   - No copy for ForeignPtr
+--     - memcpy in Data.ByteString.Internal, OR...
+--     - just use internals above
+--   - Ptr/ForeignPtr is actually higher-level than mutablebytearray
+--     - Only gets us additional instances; no point in benchmarking Storable allocation
+--
+-- NEW CLASS APPROACH:
+--   - subclass Primitive or Storable, and Eq
+--   - add 'unicorn :: Word8' (Magic value :)), and 'writeIsAtomic' method
+--         - SO, options:
+--           - have 'magic' which must be the same as value read from DADADA... (we can do an assertion in newChan)
+--             - this would let us use 'copy' of a mutablearray, replicated
+--           - have 'unicorn' method (preferable if just as easy)
+--             - this would mean we would have to use setByteArray (which has fast primops for all existing Prim)
+--             - we *might* be able to have a polymorphic unsafeperformIO source for cloning
+--   - both can have defaults
+--  TODO:
+--    - class with unicorn + isAtomic
+--    - global sigArr copying
+--    - use setByteArray when isAtomic (else no need)
+--  BENEFITS: - no need to store magic in constructor
+--            - writeIsAtomic is also a trivial constant
+--
 
 
 -- TODO This Eq constraint here and below is obnoxious...
@@ -214,22 +306,29 @@ readChanOnExceptionUnmasked h = \(OutChan ce@(ChanEnd magic _ _))-> do
     maybeUpdateStreamHead
     let readBlocking = inline h $ readMVarIx mvarIndexed segIx    -- NOTE [1]
         readElem = readElementArray eArr segIx
-    -- TODO ADD CHECK FOR SIZEoF > WORD SIZE HERE; currently only works for Int
-    el <- readElem
-    if (el /= magic) 
-      -- We know `el` was atomically written:
-      then return el
-      else do
-        -- Assume probably blocking (Note: casByteArrayInt is a full barrier)
-        actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellBlocking
-        case actuallyWas of
-             -- succeeded writing Empty; proceed with blocking
-             0 {- Empty -} -> readBlocking
-             -- else in the meantime, writer wrote
-             1 {- Written -} -> readElem
-             -- else in the meantime a dupChan reader read, blocking
-             2 {- Blocking -} -> readBlocking
-             _ -> error "Invalid signal seen in readChanOnExceptionUnmasked!"
+        slowRead = do 
+           -- Assume probably blocking (Note: casByteArrayInt is a full barrier)
+           actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellBlocking
+           case actuallyWas of
+                -- succeeded writing Empty; proceed with blocking
+                0 {- Empty -} -> readBlocking
+                -- else in the meantime, writer wrote
+                1 {- Written -} -> readElem
+                -- else in the meantime a dupChan reader read, blocking
+                2 {- Blocking -} -> readBlocking
+                _ -> error "Invalid signal seen in readChanOnExceptionUnmasked!"
+    -- TODO NOT YET IMPLEMENTED: use polymorphic writeIsAtomic
+    -- If we know writes of this element are atomic, we can determine if the
+    -- element has been written, and possibly return it without consulting
+    -- sigArr.
+    if True -- TODO TODO
+        then do
+            el <- readElem
+            if (el /= magic) 
+              -- We know `el` was atomically written:
+              then return el
+              else slowRead
+        else slowRead
   -- [1] we must use `readMVarIx` here to support `dupChan`. It's also
   -- important that the behavior of readMVarIx be identical to a readMVar on
   -- the same MVar.
