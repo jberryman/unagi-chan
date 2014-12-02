@@ -70,9 +70,11 @@ library
                      , primitive>=0.5.3
   default-language:    Haskell2010
   
-  -- We'll need some additional barriers for correctness:
   if !arch(i386) && !arch(x86_64)
     cpp-options: -DNOT_x86
+  -- TODO: more complete list of 64-bit archs:
+  if arch(x86_64)
+    cpp-options: -DIS_64_BIT
 
   -- tryReadMVar is only available and non-broken on ghc >= 7.8.3
   if impl(ghc >= 7.8.3)
@@ -82,7 +84,6 @@ library
 --  - For GHC 7.10+
 --     - look at small arrays (w/out card-marking)
 --     - re-benchmark array creation and adjust next segment wait
---     - if we get clarity on whether atomic ops are barriers then we may be able to remove some of our explicit barriers
 --  - Do a benchmark of multiple queues running in parallel, to see if we are
 --     affected by global allocator issues with pinned memory:
 --     http://thread.gmane.org/gmane.comp.lang.haskell.parallel/218
@@ -123,6 +124,8 @@ test-suite test
   -- These have to be copied from 'library' section too!
   if !arch(i386) && !arch(x86_64)
     cpp-options: -DNOT_x86
+  if arch(x86_64)
+    cpp-options: -DIS_64_BIT
  
   if impl(ghc >= 7.8.3)
     cpp-options: -DTRYREADMVAR

@@ -2,6 +2,7 @@ module Control.Concurrent.Chan.Unagi.Unboxed (
     -- * Creating channels
       newChan
     , InChan(), OutChan()
+    , UnagiPrim(..)
     -- * Channel operations
     -- ** Reading
     , readChan
@@ -28,17 +29,16 @@ module Control.Concurrent.Chan.Unagi.Unboxed (
 import Control.Concurrent.Chan.Unagi.Unboxed.Internal
 -- For 'writeList2Chan', as in vanilla Chan
 import System.IO.Unsafe ( unsafeInterleaveIO ) 
-import Data.Primitive(Prim)
 
 
 -- | Create a new channel, returning its write and read ends.
-newChan :: Prim a=> IO (InChan a, OutChan a)
+newChan :: UnagiPrim a=> IO (InChan a, OutChan a)
 newChan = newChanStarting (maxBound - 10) 
     -- lets us test counter overflow in tests and normal course of operation
 
 -- | Return a lazy list representing the contents of the supplied OutChan, much
 -- like System.IO.hGetContents.
-getChanContents :: (Eq a, Prim a)=> OutChan a -> IO [a]
+getChanContents :: UnagiPrim a=> OutChan a -> IO [a]
 getChanContents ch = unsafeInterleaveIO (do
                             x  <- readChan ch
                             xs <- getChanContents ch
@@ -47,6 +47,6 @@ getChanContents ch = unsafeInterleaveIO (do
 
 -- | Write an entire list of items to a chan type. Writes here from multiple
 -- threads may be interleaved, and infinite lists are supported.
-writeList2Chan :: Prim a=> InChan a -> [a] -> IO ()
+writeList2Chan :: UnagiPrim a=> InChan a -> [a] -> IO ()
 {-# INLINABLE writeList2Chan #-}
 writeList2Chan ch = sequence_ . map (writeChan ch)

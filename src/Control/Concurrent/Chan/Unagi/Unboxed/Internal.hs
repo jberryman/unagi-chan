@@ -4,6 +4,7 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
     {-# WARNING "This library is unlikely to perform well on architectures without a fetch-and-add instruction" #-}
 #endif
     (sEGMENT_LENGTH
+    , UnagiPrim(..)
     , InChan(..), OutChan(..), ChanEnd(..), Cell, Stream(..), ElementArray(..), SignalIntArray
     , readElementArray, writeElementArray
     , NextSegment(..), StreamHead(..)
@@ -27,10 +28,10 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
 --         - fast with memcpy
 --
 -- TODO post allocation tests:
---       - move the copying code into no-blocking-variant-unboxed-2-copyMutableByteArray
+--       + move the copying code into no-blocking-variant-unboxed-2-copyMutableByteArray
 --       - play with NOINLINE etc on all slow path code. Look at conditionals and case
 --         - also consider not unboxing (and moving to back) data involved in that slow path
---       - time using Addr for writes and reads
+--       + time using Addr for writes and reads
 --       - test waiting longer to pre-allocate (so it stays in cache?)
 --       - Use a small sigArr (like a bitmap) 
 --         - maybe even do something clever with fetch-and-add rather than CAS,
@@ -70,10 +71,13 @@ import qualified Data.Primitive as P
 import Control.Monad
 import Control.Applicative
 import Data.Bits
-import Data.Typeable(Typeable)
 import GHC.Exts(inline)
-import Utilities
+-- For instances:
+import Data.Typeable(Typeable)
+import Data.Int(Int8,Int16,Int32,Int64)
+import Data.Word(Word,Word8,Word16,Word32,Word64)
 
+import Utilities
 import Control.Concurrent.Chan.Unagi.Constants
 
 -- | The write end of a channel created with 'newChan'.
@@ -85,26 +89,17 @@ newtype OutChan a = OutChan (ChanEnd a)
     deriving Typeable
 
 instance Eq (InChan a) where
-    (InChan (ChanEnd _ _ headA)) == (InChan (ChanEnd _ _ headB))
+    (InChan (ChanEnd _ headA)) == (InChan (ChanEnd _ headB))
         = headA == headB
 instance Eq (OutChan a) where
-    (OutChan (ChanEnd _ _ headA)) == (OutChan (ChanEnd _ _ headB))
+    (OutChan (ChanEnd _ headA)) == (OutChan (ChanEnd _ headB))
         = headA == headB
 
--- The magic value we initialize our ElementArray with. When we're dealing with
--- objects word-sized or smaller (for atomicity) the reader can return with its
--- element after only inspecting the ElementArray when the value it reads does
--- not equal the magic value.
-type Magic a = a
 
 -- InChan & OutChan are mostly identical, sharing a stream, but with
 -- independent counters
 data ChanEnd a = 
-            -- the value we initialize our ElementArray with. We only need this
-            -- in read here, but will use it on the write side in other
-            -- implementations:
-   ChanEnd  !(Magic a)
-            -- Both Chan ends must start with the same counter value.
+   ChanEnd  -- Both Chan ends must start with the same counter value.
             !AtomicCounter 
             -- the stream head; this must never point to a segment whose offset
             -- is greater than the counter value
@@ -116,11 +111,6 @@ data StreamHead a = StreamHead !Int !(Stream a)
 
 -- The array we actually store our Prim elements in
 newtype ElementArray a = ElementArray (P.MutableByteArray RealWorld)
--- TODO 
---   - we could easily use 'vector' to support a wider array of primitive
---      elements here.
---       - and what about Storable?
---     see http://stackoverflow.com/q/4908880/176841
 
 readElementArray :: (P.Prim a)=> ElementArray a -> Int -> IO a
 {-# INLINE readElementArray #-}
@@ -153,42 +143,79 @@ cellWritten  = 1
 cellBlocking = 2
 
 
--- TODO: we'd like this to be as fast as possible. copyByteArray of a global
--- byte array for sigArr, could be possible; or using Addr (like bytestring)
--- and allocating/setting sigArr and eArr as a contiguous region (with
--- cellEmpty now equal to 0xDADADADA...); or finally we could have a global
--- 1024-byte array of magic which we copy for sigArr and `*sizeOf a` for eArr.
--- My attempts at doing the Unagi-style storing of segSource producer in
--- ChanEnd incurred ~10% slowdown I couldn't figure out how to avoid.
-segSource :: forall a. (P.Prim a)=> IO (SignalIntArray, ElementArray a) --ScopedTypeVariables
+-- NOTE: attempts to make allocation and initialization faster via copying, or
+-- other tricks failed; although a calloc was about 2x faster (but that was for
+-- unmanaged memory)
+segSource :: forall a. (UnagiPrim a)=> IO (SignalIntArray, ElementArray a) --ScopedTypeVariables
 {-# INLINE segSource #-}
 segSource = do
-    let eBytes = P.sizeOf (undefined :: a) `unsafeShiftL` lOG_SEGMENT_LENGTH
     -- A largish pinned array seems like it would be the best choice here.
     sigArr <- P.newAlignedPinnedByteArray 
                 (P.sizeOf    cellEmpty `unsafeShiftL` lOG_SEGMENT_LENGTH) -- times sEGMENT_LENGTH
                 (P.alignment cellEmpty)
+    -- TODO MAKE IT THE MAX OF alignment AND sizeOf Word ?
     -- NOTE: we need these to be aligned to (some multiple of) Word boundaries
     -- for magic trick to be correct, and for assumptions about atomicity of
     -- loads/stores to hold!
     eArr <- P.newAlignedPinnedByteArray 
-                eBytes
+                (P.sizeOf (undefined :: a) `unsafeShiftL` lOG_SEGMENT_LENGTH)
                 (P.alignment (undefined :: a))
     P.setByteArray sigArr 0 sEGMENT_LENGTH cellEmpty
-    P.fillByteArray eArr 0 eBytes 0xDA -- why not an anti-programming mvt?
+    maybe (return ()) 
+        (P.setByteArray eArr 0 sEGMENT_LENGTH) (atomicUnicorn :: Maybe a)
     return (sigArr, ElementArray eArr)
 
-{-
--- | Our class of types supporting primitive array operations
-class (Prim a, Eq a)=> UnagiPrim a where
-    -- | 
-    writeIsAtomic :: a -> Bool
-    writeIsAtomic = False
 
-    -- TODO or maybe make atomicUnicorn :: Maybe a   ...  LOL
-    unicorn :: a
-    unicorn = error "We tried to use the unicorn value when writeIsAtomic == False"  -- TODO not a great solution
-    -}
+-- | Our class of types supporting primitive array operations
+class (P.Prim a, Eq a)=> UnagiPrim a where
+    -- | When the read and write operations of the underlying @Prim@ instances
+    -- on aligned memory are atomic, this can be set to @Just x@ where @x@ is a
+    -- rare (i.e.  unlikely to occur frequently in your data) magic value which
+    -- may help speed up some @UnagiPrim@ operations.
+    --
+    -- Where 'Prim' instance operations are not atomic, this *must* be set to
+    -- @Nothing@.
+    atomicUnicorn :: Maybe a
+    atomicUnicorn = Nothing
+
+
+-- These ought all to be atomic for 32-bit or 64-bit systems:
+instance UnagiPrim Char	where
+    atomicUnicorn = Just '\1010101'
+instance UnagiPrim Float where
+    atomicUnicorn = Just 0xDADADA
+instance UnagiPrim Int where
+    atomicUnicorn = Just 0xDADADA
+instance UnagiPrim Int8	where
+    atomicUnicorn = Just 113
+instance UnagiPrim Int16 where
+    atomicUnicorn = Just 0xDAD
+instance UnagiPrim Int32 where
+    atomicUnicorn = Just 0xDADADA
+instance UnagiPrim Word	where
+    atomicUnicorn = Just 0xDADADA
+instance UnagiPrim Word8 where
+    atomicUnicorn = Just 0xDA
+instance UnagiPrim Word16 where
+    atomicUnicorn = Just 0xDADA
+instance UnagiPrim Word32 where
+    atomicUnicorn = Just 0xDADADADA
+instance UnagiPrim P.Addr where
+    atomicUnicorn = Just P.nullAddr
+-- These should conservatively be expected to be atomic only on 64-bit
+-- machines:
+instance UnagiPrim Int64 where
+#ifdef IS_64_BIT
+    atomicUnicorn = Just 0xDADADADADADA
+#endif
+instance UnagiPrim Word64 where
+#ifdef IS_64_BIT
+    atomicUnicorn = Just 0xDADADADADADA
+#endif
+instance UnagiPrim Double where
+#ifdef IS_64_BIT
+    atomicUnicorn = Just 0xDADADADADADA
+#endif
 
 -- NOTE: we tried combining the SignalIntArray and ElementArray into a single
 -- bytearray in the unagi-unboxed-combined-bytearray branch but saw no
@@ -209,13 +236,12 @@ data Stream a =
 data NextSegment a = NoSegment | Next !(Stream a)
 
 -- we expose `startingCellOffset` for debugging correct behavior with overflow:
-newChanStarting :: (P.Prim a)=> Int -> IO (InChan a, OutChan a)
+newChanStarting :: UnagiPrim a=> Int -> IO (InChan a, OutChan a)
 {-# INLINE newChanStarting #-}
 newChanStarting !startingCellOffset = do
-    (sigArr0,eArr0@(ElementArray eArr0')) <- segSource
-    magic <- P.readByteArray eArr0' 0
+    (sigArr0,eArr0) <- segSource
     stream <- Stream sigArr0 eArr0 <$> newIndexedMVar <*> newIORef NoSegment
-    let end = ChanEnd magic
+    let end = ChanEnd
                   <$> newCounter (startingCellOffset - 1)
                   <*> newIORef (StreamHead startingCellOffset stream)
     liftA2 (,) (InChan <$> end) (OutChan <$> end)
@@ -226,15 +252,15 @@ newChanStarting !startingCellOffset = do
 -- @OutChan@ and the one returned here, creating a kind of broadcast channel.
 dupChan :: InChan a -> IO (OutChan a)
 {-# INLINE dupChan #-}
-dupChan (InChan (ChanEnd magic counter streamHead)) = do
+dupChan (InChan (ChanEnd counter streamHead)) = do
     hLoc <- readIORef streamHead
     loadLoadBarrier
     wCount <- readCounter counter
-    OutChan <$> (ChanEnd magic <$> newCounter wCount <*> newIORef hLoc)
+    OutChan <$> (ChanEnd <$> newCounter wCount <*> newIORef hLoc)
 
 
 -- | Write a value to the channel.
-writeChan :: (P.Prim a)=> InChan a -> a -> IO ()
+writeChan :: UnagiPrim a=> InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
 writeChan (InChan ce) = \a-> mask_ $ do 
     (segIx, (Stream sigArr eArr mvarIndexed next), maybeUpdateStreamHead) <- moveToNextCell ce
@@ -260,12 +286,6 @@ writeChan (InChan ce) = \a-> mask_ $ do
 
 
 -- TODO
---     - make magic correct
---       - FUUUUCK but a user could define one of < Word but that is non-atomic!!
---     - play with optimizing segSource
---       - copying
---       - different alignments, non-pinned, etc.
---       - use Storable instead.
 --
 -- FOREIGN, ETC NOTES:
 --   - ByteString/Vector use ForeignPtr which is pinned aligned.
@@ -279,19 +299,9 @@ writeChan (InChan ce) = \a-> mask_ $ do
 --   - Ptr/ForeignPtr is actually higher-level than mutablebytearray
 --     - Only gets us additional instances; no point in benchmarking Storable allocation
 --
--- NEW CLASS APPROACH:
---   - subclass Primitive or Storable, and Eq
---   - add 'unicorn :: Word8' (Magic value :)), and 'writeIsAtomic' method
---         - SO, options:
---           - have 'magic' which must be the same as value read from DADADA... (we can do an assertion in newChan)
---             - this would let us use 'copy' of a mutablearray, replicated
---           - have 'unicorn' method (preferable if just as easy)
---             - this would mean we would have to use setByteArray (which has fast primops for all existing Prim)
---             - we *might* be able to have a polymorphic unsafeperformIO source for cloning
---   - both can have defaults
 --  TODO:
 --    - class with unicorn + isAtomic
---    - global sigArr copying
+--    + global sigArr copying
 --    - use setByteArray when isAtomic (else no need)
 --  BENEFITS: - no need to store magic in constructor
 --            - writeIsAtomic is also a trivial constant
@@ -299,9 +309,9 @@ writeChan (InChan ce) = \a-> mask_ $ do
 
 
 -- TODO This Eq constraint here and below is obnoxious...
-readChanOnExceptionUnmasked :: (Eq a, P.Prim a)=> (IO a -> IO a) -> OutChan a -> IO a
+readChanOnExceptionUnmasked :: UnagiPrim a=> (IO a -> IO a) -> OutChan a -> IO a
 {-# INLINE readChanOnExceptionUnmasked #-}
-readChanOnExceptionUnmasked h = \(OutChan ce@(ChanEnd magic _ _))-> do
+readChanOnExceptionUnmasked h = \(OutChan ce)-> do
     (segIx, (Stream sigArr eArr mvarIndexed _), maybeUpdateStreamHead) <- moveToNextCell ce
     maybeUpdateStreamHead
     let readBlocking = inline h $ readMVarIx mvarIndexed segIx    -- NOTE [1]
@@ -317,18 +327,17 @@ readChanOnExceptionUnmasked h = \(OutChan ce@(ChanEnd magic _ _))-> do
                 -- else in the meantime a dupChan reader read, blocking
                 2 {- Blocking -} -> readBlocking
                 _ -> error "Invalid signal seen in readChanOnExceptionUnmasked!"
-    -- TODO NOT YET IMPLEMENTED: use polymorphic writeIsAtomic
     -- If we know writes of this element are atomic, we can determine if the
     -- element has been written, and possibly return it without consulting
     -- sigArr.
-    if True -- TODO TODO
-        then do
+    case atomicUnicorn of
+         Just magic -> do
             el <- readElem
             if (el /= magic) 
               -- We know `el` was atomically written:
               then return el
               else slowRead
-        else slowRead
+         Nothing -> slowRead
   -- [1] we must use `readMVarIx` here to support `dupChan`. It's also
   -- important that the behavior of readMVarIx be identical to a readMVar on
   -- the same MVar.
@@ -340,7 +349,7 @@ readChanOnExceptionUnmasked h = \(OutChan ce@(ChanEnd magic _ _))-> do
 -- the message that the read would have returned is likely to be lost, even when
 -- the read is known to be blocked on an empty queue. If you need to handle
 -- this scenario, you can use 'readChanOnException'.
-readChan :: (Eq a, P.Prim a)=> OutChan a -> IO a
+readChan :: UnagiPrim a=> OutChan a -> IO a
 {-# INLINE readChan #-}
 readChan = readChanOnExceptionUnmasked id
 
@@ -352,7 +361,7 @@ readChan = readChanOnExceptionUnmasked id
 -- The second argument is a handler that takes a blocking IO action returning
 -- the element, and performs some recovery action.  When the handler is called,
 -- the passed @IO a@ is the only way to access the element.
-readChanOnException :: (Eq a, P.Prim a)=> OutChan a -> (IO a -> IO ()) -> IO a
+readChanOnException :: UnagiPrim a=> OutChan a -> (IO a -> IO ()) -> IO a
 {-# INLINE readChanOnException #-}
 readChanOnException c h = mask_ $ 
     readChanOnExceptionUnmasked (\io-> io `onException` (h io)) c
@@ -362,9 +371,9 @@ readChanOnException c h = mask_ $
 -- increments counter, finds stream segment of corresponding cell (updating the
 -- stream head pointer as needed), and returns the stream segment and relative
 -- index of our cell.
-moveToNextCell :: (P.Prim a)=> ChanEnd a -> IO (Int, Stream a, IO ())
+moveToNextCell :: UnagiPrim a=> ChanEnd a -> IO (Int, Stream a, IO ())
 {-# INLINE moveToNextCell #-}
-moveToNextCell (ChanEnd magic counter streamHead) = do
+moveToNextCell (ChanEnd counter streamHead) = do
     (StreamHead offset0 str0) <- readIORef streamHead
     ix <- incrCounter 1 counter
     let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
@@ -390,7 +399,7 @@ moveToNextCell (ChanEnd magic counter streamHead) = do
 -- thread-safely try to fill `nextSegRef` at the next offset with a new
 -- segment, waiting some number of iterations (for other threads to handle it).
 -- Returns nextSegRef's StreamSegment.
-waitingAdvanceStream :: (P.Prim a)=> IORef (NextSegment a) -> Int -> IO (Stream a)
+waitingAdvanceStream :: (UnagiPrim a)=> IORef (NextSegment a) -> Int -> IO (Stream a)
 waitingAdvanceStream nextSegRef = go where
   go !wait = assert (wait >= 0) $ do
     tk <- readForCAS nextSegRef
