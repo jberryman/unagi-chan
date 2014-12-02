@@ -27,31 +27,49 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
 --       - writing bytearrays
 --         - fast with memcpy
 --
--- TODO post allocation tests:
---       + move the copying code into no-blocking-variant-unboxed-2-copyMutableByteArray
---       - play with NOINLINE etc on all slow path code. Look at conditionals and case
---         - also consider not unboxing (and moving to back) data involved in that slow path
---       + time using Addr for writes and reads
---       - test waiting longer to pre-allocate (so it stays in cache?)
---       - Use a small sigArr (like a bitmap) 
---         - maybe even do something clever with fetch-and-add rather than CAS,
---            with different values being added to twiddle different parts of bit range
---         - for no-blocking variant, we could make size == smallest atomic write size
---            and that would give us a 4x smaller array if we wanted to re-use
---            that sizing everywhere
---       - use ghc-events-analyze for god's sake!:  http://www.well-typed.com/blog/86/
---       - restructuring:
+-- TODO MAYBE another variation:
+--    Either with a single reader, or a counter that tracks readers as they
+--    exit a segment (so that we know when can be manually 'free'd), allowing
+--    use of unmanaged memory, and:
+--         - creatable with calloc
 --         - replace IORef with an unboxed 1-element array holding Addr of MutableByteArray? or something...
 --         - nullPtr can be used to get us references of (Maybe a)
 --            > IORef (StreamHead                                 )
 --            >       Int + (Stream                               )
 --            >             arr + arr + IndexedMvar + Maybe Stream
 --           - We would need to move IndexedMvar into streamhead
---              - probably better structure anyway; try boxed and !unboxed
---           - we could even keep around IndexedMvar for longer to avoid many
---              mutable references, and overhead of creation. (based on size?)
+--         - No CAS for Ptr/ForeignPtr but we can probably extract the mutablebytearray for CAS
+--            Data.Primitive.ByteArray.mutableByteArrayContents ~> Addr
+--             , and ForeignPtr holds an Addr# + MutableByteArray internally...
+--             , use GHC.ForeignPtr and wrap MutableByteArray in PlainPtr and off to races
+--
+-- TODO post allocation tests:
+--       + move the copying code into no-blocking-variant-unboxed-2-copyMutableByteArray
+--       + play with NOINLINE etc on all slow path code. Look at conditionals and case
+--         + also consider not unboxing (and moving to back) data involved in that slow path
+--         NO BENEFIT
+--       + time using Addr for writes and reads
+--         NO DIFFERENCE
+--       + IN MULTI: test waiting longer to pre-allocate (so it stays in cache?)
+--         NO CLEAR DIFFERENCE, even when I remove pre-allocation altogether
+--       + try keeping around IndexedMvar
+--         NO DIFFERENCE EVEN IN MOCKUP
+--       + test replacing casByteArray with fetchAddByteArray (that CAS is a very large chunk of latency)
+--         NOPE. JUST A LITTLE SLOWER IN write all test
+--         + Use a small sigArr (like a bitmap) 
+--           NOT REALLY VISIBLE AMORTIZED IN SINGLE BENCHMARK, BUT OBVIOUSLY GOOD FOR ALLOCATOR THREAD
+--           - maybe even do something clever with fetch-and-add rather than CAS,
+--              with different values being added to twiddle different parts of bit range
+--           - for no-blocking variant, we could make size == smallest atomic write size
+--              and that would give us a 4x (or 8x for 64-bit) smaller array if
+--              we wanted to re-use that sizing everywhere
+--       - use ghc-events-analyze for god's sake!:  http://www.well-typed.com/blog/86/
 --
 -- TODO GHC 7.10 or someday:
+--       - use segment length of e.g. 1022 to account for MutableByteArray
+--         header, then align to cache line (note: we don't really need to use
+--         div/mod here; just subtraction) This could be done in all
+--         implementations. (boxed arrays are: 3 + n/128 + n words?? Who knows...)
 --       - calloc for mutableByteArray, when/if available
 --       - non-temporal writes that bypass the cache? See: http://lwn.net/Articles/255364/
 --       - SIMD stuff for batch writing, or zeroing, etc. etc
@@ -60,6 +78,14 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
 --   - Magic value equality for all fields of array, with stored magic value, for many different Prim a
 --   - All tests with different Prim a (both > and < sizeOf Word)
 --   - word-overlapping atomic thread-safe writes of size < 1 word (see other Unboxed)
+--       - 4 threads: incrementing Int8 individual bytes of a 4-byte arr, minBound -> maxBound
+--       - same for Int16
+--
+-- TODO HERE:
+--   - fix tests
+--   - update CHANGELOG w/r/t unboxed changes
+--   - add new tests needed
+--   - continue with NoBlocking.Unboxed
 
 
 import Data.IORef
@@ -153,7 +179,6 @@ segSource = do
     sigArr <- P.newAlignedPinnedByteArray 
                 (P.sizeOf    cellEmpty `unsafeShiftL` lOG_SEGMENT_LENGTH) -- times sEGMENT_LENGTH
                 (P.alignment cellEmpty)
-    -- TODO MAKE IT THE MAX OF alignment AND sizeOf Word ?
     -- NOTE: we need these to be aligned to (some multiple of) Word boundaries
     -- for magic trick to be correct, and for assumptions about atomicity of
     -- loads/stores to hold!
@@ -161,20 +186,25 @@ segSource = do
                 (P.sizeOf (undefined :: a) `unsafeShiftL` lOG_SEGMENT_LENGTH)
                 (P.alignment (undefined :: a))
     P.setByteArray sigArr 0 sEGMENT_LENGTH cellEmpty
+    -- If no atomicUnicorn then we always check in at sigArr, so no need to
+    -- initialize eArr:
     maybe (return ()) 
         (P.setByteArray eArr 0 sEGMENT_LENGTH) (atomicUnicorn :: Maybe a)
     return (sigArr, ElementArray eArr)
+    -- NOTE: We always CAS this into place which provides write barrier, such
+    -- that arrays are fully initialized before they can be read. No
+    -- corresponding barrier is needed in waitingAdvanceStream.
 
 
 -- | Our class of types supporting primitive array operations
 class (P.Prim a, Eq a)=> UnagiPrim a where
     -- | When the read and write operations of the underlying @Prim@ instances
-    -- on aligned memory are atomic, this can be set to @Just x@ where @x@ is a
-    -- rare (i.e.  unlikely to occur frequently in your data) magic value which
-    -- may help speed up some @UnagiPrim@ operations.
+    -- on aligned memory are atomic, this may be set to @Just x@ where @x@ is
+    -- some rare (i.e.  unlikely to occur frequently in your data) magic value;
+    -- this might help speed up some @UnagiPrim@ operations.
     --
-    -- Where 'Prim' instance operations are not atomic, this *must* be set to
-    -- @Nothing@.
+    -- Where those 'Prim' instance operations are not atomic, this *must* be
+    -- set to @Nothing@.
     atomicUnicorn :: Maybe a
     atomicUnicorn = Nothing
 
@@ -282,33 +312,9 @@ writeChan (InChan ce) = \a-> mask_ $ do
   -- [1] casByteArrayInt provides the write barrier we need here to make sure
   -- GHC maintains our ordering such that the element is written before we
   -- signal its availability with the CAS to sigArr that follows. See [2] in
-  -- readChanOnExceptionUnmasked:
+  -- readChanOnExceptionUnmasked.
 
 
--- TODO
---
--- FOREIGN, ETC NOTES:
---   - ByteString/Vector use ForeignPtr which is pinned aligned.
---   - No CAS for Ptr/ForeignPtr but we can probably extract the mutablebytearray for CAS
---     - Data.Primitive.ByteArray.mutableByteArrayContents ~> Addr
---       , and ForeignPtr holds an Addr# + MutableByteArray internally...
---       , use GHC.ForeignPtr and wrap MutableByteArray in PlainPtr and off to races
---   - No copy for ForeignPtr
---     - memcpy in Data.ByteString.Internal, OR...
---     - just use internals above
---   - Ptr/ForeignPtr is actually higher-level than mutablebytearray
---     - Only gets us additional instances; no point in benchmarking Storable allocation
---
---  TODO:
---    - class with unicorn + isAtomic
---    + global sigArr copying
---    - use setByteArray when isAtomic (else no need)
---  BENEFITS: - no need to store magic in constructor
---            - writeIsAtomic is also a trivial constant
---
-
-
--- TODO This Eq constraint here and below is obnoxious...
 readChanOnExceptionUnmasked :: UnagiPrim a=> (IO a -> IO a) -> OutChan a -> IO a
 {-# INLINE readChanOnExceptionUnmasked #-}
 readChanOnExceptionUnmasked h = \(OutChan ce)-> do
@@ -318,7 +324,7 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
         readElem = readElementArray eArr segIx
         slowRead = do 
            -- Assume probably blocking (Note: casByteArrayInt is a full barrier)
-           actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellBlocking
+           actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellBlocking -- NOTE [2]
            case actuallyWas of
                 -- succeeded writing Empty; proceed with blocking
                 0 {- Empty -} -> readBlocking
@@ -341,6 +347,9 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
   -- [1] we must use `readMVarIx` here to support `dupChan`. It's also
   -- important that the behavior of readMVarIx be identical to a readMVar on
   -- the same MVar.
+  --
+  -- [2] casByteArrayInt provides the loadLoadBarrier we need here. See [1] in
+  -- writeChan.
 
 
 -- | Read an element from the chan, blocking if the chan is empty.
