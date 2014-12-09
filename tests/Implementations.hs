@@ -4,7 +4,6 @@ import qualified Control.Concurrent.Chan.Unagi as U
 import qualified Control.Concurrent.Chan.Unagi.Unboxed as UU
 import qualified Control.Concurrent.Chan.Unagi.Bounded as UB
 import qualified Control.Concurrent.Chan.Unagi.NoBlocking as UN
-import qualified Data.Primitive as P
 import Control.Concurrent(yield)
 
 type Implementation inc outc a = (IO (inc a, outc a), inc a -> a -> IO (), outc a -> IO a, inc a -> IO (outc a))
@@ -12,7 +11,7 @@ type Implementation inc outc a = (IO (inc a, outc a), inc a -> a -> IO (), outc 
 unagiImpl :: Implementation U.InChan U.OutChan a
 unagiImpl =  (U.newChan, U.writeChan, U.readChan, U.dupChan)
 
-unboxedUnagiImpl :: (P.Prim a)=> Implementation UU.InChan UU.OutChan a
+unboxedUnagiImpl :: (UU.UnagiPrim a)=> Implementation UU.InChan UU.OutChan a
 unboxedUnagiImpl = (UU.newChan, UU.writeChan, UU.readChan, UU.dupChan)
 
 unagiBoundedImpl :: Int -> Implementation UB.InChan UB.OutChan a
