@@ -42,50 +42,19 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
 --            Data.Primitive.ByteArray.mutableByteArrayContents ~> Addr
 --             , and ForeignPtr holds an Addr# + MutableByteArray internally...
 --             , use GHC.ForeignPtr and wrap MutableByteArray in PlainPtr and off to races
+--         - we can re-use read segments as soon as they pass.
 --
--- TODO post allocation tests:
---       + move the copying code into no-blocking-variant-unboxed-2-copyMutableByteArray
---       + play with NOINLINE etc on all slow path code. Look at conditionals and case
---         + also consider not unboxing (and moving to back) data involved in that slow path
---         NO BENEFIT
---       + time using Addr for writes and reads
---         NO DIFFERENCE
---       + IN MULTI: test waiting longer to pre-allocate (so it stays in cache?)
---         NO CLEAR DIFFERENCE, even when I remove pre-allocation altogether
---       + try keeping around IndexedMvar
---         NO DIFFERENCE EVEN IN MOCKUP
---       + test replacing casByteArray with fetchAddByteArray (that CAS is a very large chunk of latency)
---         NOPE. JUST A LITTLE SLOWER IN write all test
---         + Use a small sigArr (like a bitmap) 
---           NOT REALLY VISIBLE AMORTIZED IN SINGLE BENCHMARK, BUT OBVIOUSLY GOOD FOR ALLOCATOR THREAD
---           - maybe even do something clever with fetch-and-add rather than CAS,
---              with different values being added to twiddle different parts of bit range
---           - for no-blocking variant, we could make size == smallest atomic write size
---              and that would give us a 4x (or 8x for 64-bit) smaller array if
---              we wanted to re-use that sizing everywhere
---       - use ghc-events-analyze for god's sake!:  http://www.well-typed.com/blog/86/
---
--- TODO GHC 7.10 or someday:
+-- TODO GHC 7.10 and/or someday:
 --       - use segment length of e.g. 1022 to account for MutableByteArray
 --         header, then align to cache line (note: we don't really need to use
 --         div/mod here; just subtraction) This could be done in all
 --         implementations. (boxed arrays are: 3 + n/128 + n words?? Who knows...)
+--       - use a smaller sigArr of 1024 bytes (just makes segSource a little cheaper)
+--          - here use a clever fetchAndAdd to distinguish 4 different cells (+0001, vs +0100, etc)
+--          - the NoBlocking can read/write to individual bytes
 --       - calloc for mutableByteArray, when/if available
 --       - non-temporal writes that bypass the cache? See: http://lwn.net/Articles/255364/
 --       - SIMD stuff for batch writing, or zeroing, etc. etc
---
--- TODO TESTS:
---   - Magic value equality for all fields of array, with stored magic value, for many different Prim a
---   - All tests with different Prim a (both > and < sizeOf Word)
---   - word-overlapping atomic thread-safe writes of size < 1 word (see other Unboxed)
---       - 4 threads: incrementing Int8 individual bytes of a 4-byte arr, minBound -> maxBound
---       - same for Int16
---
--- TODO HERE:
---   - fix tests
---   - update CHANGELOG w/r/t unboxed changes
---   - add new tests needed
---   - continue with NoBlocking.Unboxed
 
 
 import Data.IORef
