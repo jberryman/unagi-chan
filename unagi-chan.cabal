@@ -103,6 +103,7 @@ test-suite test
   ghc-options: -Wall -funbox-strict-fields
   ghc-options: -O2  -rtsopts  -threaded -with-rtsopts=-N
   ghc-options: -fno-ignore-asserts
+  ghc-options: -fno-warn-orphans 
   -- I guess we need to put 'src' here to get access to Internal modules
   hs-source-dirs: tests, src
   main-is: Main.hs

@@ -7,7 +7,7 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
     , UnagiPrim(..)
     , InChan(..), OutChan(..), ChanEnd(..), Cell, Stream(..), ElementArray(..), SignalIntArray
     , readElementArray, writeElementArray
-    , NextSegment(..), StreamHead(..)
+    , NextSegment(..), StreamHead(..), segSource
     , newChanStarting, writeChan, readChan, readChanOnException
     , dupChan
     )
