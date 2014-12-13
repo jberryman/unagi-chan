@@ -10,6 +10,8 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
     , NextSegment(..), StreamHead(..), segSource
     , newChanStarting, writeChan, readChan, readChanOnException
     , dupChan
+    -- for NoBlocking.Unboxed
+    , moveToNextCell, waitingAdvanceStream, cellEmpty
     )
     where
 

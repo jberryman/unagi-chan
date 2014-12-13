@@ -35,6 +35,17 @@ dupChanMain = do
     putStrLn "OK"
 
     putStrLn "==================="
+    putStrLn "Test dupChan Unagi.NoBlocking.Unboxed:"
+    -- ------
+    putStr "    Reader/Reader... "
+    replicateM_ 1000 $ dupChanTest1 unagiNoBlockingUnboxedImpl 50000
+    putStrLn "OK"
+    -- ------
+    putStr "    Writer/dupChan+Reader... "
+    replicateM_ 1000 $ dupChanTest2 unagiNoBlockingUnboxedImpl 10000
+    putStrLn "OK"
+
+    putStrLn "==================="
     putStrLn "Test dupChan Unagi.Unboxed:"
     -- ------
     putStr "    Reader/Reader... "
