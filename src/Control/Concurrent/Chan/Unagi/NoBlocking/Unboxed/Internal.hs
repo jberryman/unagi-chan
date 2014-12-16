@@ -169,10 +169,9 @@ writeChan :: UnagiPrim a=> InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
 writeChan (InChan _ ce) = \a-> mask_ $ do 
     (segIx, (Stream sigArr eArr _ next), maybeUpdateStreamHead) <- moveToNextCell ce
-    -- NOTE!: must write element bothe before updating stream head (see
+    -- NOTE!: must write element both before updating stream head (see
     -- NoBlocking), and before signaling with CAS (if applicable):
     writeElementArray eArr segIx a
-    maybeUpdateStreamHead  -- TODO WRITE BARRIER NEEDED HERE (see also NoBlocking)???
 
     let magic = atomicUnicorn
     when (isNothing magic || Just a == magic) $ do
@@ -181,12 +180,17 @@ writeChan (InChan _ ce) = \a-> mask_ $ do
       writeBarrier -- NOTE [1]
       P.writeByteArray sigArr segIx nonMagicCellWritten
               
+    maybeUpdateStreamHead -- NOTE [2]
     -- try to pre-allocate next segment:
     when (segIx == 0) $ void $
       waitingAdvanceStream next 0
   -- [1] we need a write barrier here to make sure GHC maintains our ordering
   -- such that the element is written before we signal its availability with
   -- the write to sigArr that follows. See [2] in readChanOnExceptionUnmasked.
+  --
+  -- [2] Our final use of the head reference. We must make sure this IORef is
+  -- not GC'd (and its finalizer run) until after our writes to the arrays
+  -- above. See definition of maybeUpdateStreamHead.
 
 
 -- | Read an element from the chan, returning an @'Element' a@ future which

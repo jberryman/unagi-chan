@@ -368,12 +368,16 @@ moveToNextCell (ChanEnd counter streamHead) = do
     -- We need to return this continuation here for NoBlocking.Unboxed, which
     -- needs to perform this action at different points in the reader and
     -- writer.
-    let !maybeUpdateStreamHead = 
+    let !maybeUpdateStreamHead = do
           when (segsAway > 0) $ do
             let !offsetN = 
                   offset0 + (segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH) --(segsAway*sEGMENT_LENGTH)
             writeIORef streamHead $ StreamHead offsetN str
+          touchIORef streamHead -- NOTE [1]
     return (segIx,str, maybeUpdateStreamHead)
+  -- [1] For NoBlocking.Unboxed: this helps ensure that streamHead is not GC'd
+  -- until `maybeUpdateStreamHead` is run in calling function. For correctness
+  -- of `isActive`.
 
 
 -- thread-safely try to fill `nextSegRef` at the next offset with a new

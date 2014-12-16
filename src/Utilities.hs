@@ -1,11 +1,12 @@
-{-# LANGUAGE BangPatterns  #-}
+{-# LANGUAGE BangPatterns , MagicHash , UnboxedTuples #-}
 module Utilities (
     -- * Utility Chans
     -- ** Indexed MVars
       IndexedMVar()
     , newIndexedMVar, putMVarIx, readMVarIx
-    -- ** Other stuff
+    -- * Other stuff
     , nextHighestPowerOfTwo
+    , touchIORef
     ) where
 
 import Control.Concurrent.MVar
@@ -15,6 +16,10 @@ import Data.Bits
 import Data.Word
 import Data.Atomics
 import Data.IORef
+import GHC.Prim(touch#)
+import GHC.IORef(IORef(..))
+import GHC.STRef(STRef(..))
+import GHC.Base(IO(..))
 
 -- For now: a reverse-ordered assoc list; an IntMap might be better
 newtype IndexedMVar a = IndexedMVar (IORef [(Int, MVar a)])
@@ -80,3 +85,11 @@ nextHighestPowerOfTwo n
               nhp2
 
   where maxPowerOfTwo = (floor $ sqrt $ (fromIntegral (maxBound :: Int)::Float)) ^ (2::Int)
+
+-- I'm not sure what happens if we try to use touch from
+-- Control.Monad.Primitive on our boxed IORef (if it gets unboxed), so we do
+-- this:
+touchIORef :: IORef a -> IO ()
+touchIORef (IORef (STRef v)) = IO $ \s -> 
+    case touch# v s of 
+         s' -> (# s', () #)
