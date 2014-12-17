@@ -5,6 +5,7 @@ import qualified Control.Concurrent.Chan.Unagi as U
 import qualified Control.Concurrent.Chan.Unagi.Unboxed as UU
 import qualified Control.Concurrent.Chan.Unagi.Bounded as UB
 import qualified Control.Concurrent.Chan.Unagi.NoBlocking as UN
+import qualified Control.Concurrent.Chan.Unagi.NoBlocking as UNU
 #ifdef COMPARE_BENCHMARKS
 import Control.Concurrent.Chan
 import Control.Concurrent.STM
@@ -70,6 +71,16 @@ main = do
               , bench "oversubscribing: async 100 writers 100 readers" $ nfIO $ asyncReadsWritesUnagiNoBlockingStream 100 100 n
               , bench "async Int writer, main thread read and sum" $ nfIO $ asyncSumIntUnagiNoBlockingStream n
               ]
+        , bgroup "unagi-chan Unagi.NoBlocking.Unboxed" $
+              [ bench "async 1 writers 1 readers" $ nfIO $ asyncReadsWritesUnagiNoBlockingUnboxed 1 1 n
+              , bench "oversubscribing: async 100 writers 100 readers" $ nfIO $ asyncReadsWritesUnagiNoBlockingUnboxed 100 100 n
+              , bench "async Int writer, main thread read and sum" $ nfIO $ asyncSumIntUnagiNoBlockingUnboxed n
+              ]
+        , bgroup "unagi-chan Unagi.NoBlocking.Unboxed Stream" $
+              [ bench "async 1 writers 1 readers" $ nfIO $ asyncReadsWritesUnagiNoBlockingUnboxedStream 1 1 n
+              , bench "oversubscribing: async 100 writers 100 readers" $ nfIO $ asyncReadsWritesUnagiNoBlockingUnboxedStream 100 100 n
+              , bench "async Int writer, main thread read and sum" $ nfIO $ asyncSumIntUnagiNoBlockingUnboxedStream n
+              ]
 #ifdef COMPARE_BENCHMARKS
         , bgroup "Chan" $
               [ bench "async 1 writer 1 readers" $ nfIO $ asyncReadsWritesChan 1 1 n
@@ -109,6 +120,10 @@ main = do
                 map (\c-> benchRun c $ asyncReadsWritesUnagiNoBlocking c c n) runs
             , bgroup "Unagi.NoBlocking Stream" $
                 map (\c-> benchRun c $ asyncReadsWritesUnagiNoBlockingStream c c n) runs
+            , bgroup "Unagi.NoBlocking.Unboxed" $
+                map (\c-> benchRun c $ asyncReadsWritesUnagiNoBlockingUnboxed c c n) runs
+            , bgroup "Unagi.NoBlocking.Unboxed Stream" $
+                map (\c-> benchRun c $ asyncReadsWritesUnagiNoBlockingUnboxedStream c c n) runs
             , bgroup "TQueue       " $
                 map (\c-> benchRun c $ asyncReadsWritesTQueue c c n) runs
             , bgroup "Chan         " $
@@ -137,7 +152,6 @@ asyncSumIntUnagi n = do
        readerSum !n' !tot = U.readChan o >>= readerSum (n'-1) . (tot+)
    _ <- async $ mapM_ (U.writeChan i) [1..n] -- NOTE: partially-applied writeChan
    readerSum n 0
-
 
 -- -------------------------
 -- NoBlocking variant:
@@ -198,6 +212,70 @@ asyncSumIntUnagiNoBlockingStream n = do
               UN.Pending -> threadDelay 1 >> readerSum n' tot str
               UN.Cons val str' -> readerSum (n'-1) (tot+val) str'
    _ <- async $ mapM_ (UN.writeChan i) [1..n] -- NOTE: partially-applied writeChan
+   readerSum n 0 str0
+
+
+
+
+-- -------------------------
+-- NoBlocking.Unboxed variant:
+asyncReadsWritesUnagiNoBlockingUnboxed :: Int -> Int -> Int -> IO ()
+asyncReadsWritesUnagiNoBlockingUnboxed writers readers n = do
+  -- A fairly reasonable heuristic: yield if we're oversubscribed, else do threadDelay:
+  procs <- getNumCapabilities
+  let pause = if (readers+writers) > procs then yield else threadDelay 1
+
+  let nNice = n - rem n (lcm writers readers)
+  (i,o) <- UNU.newChan
+  rcvrs <- replicateM readers $ async $ 
+             replicateM_ (nNice `quot` readers) $ 
+               UNU.readChan pause o
+  _ <- replicateM writers $ async $ replicateM_ (nNice `quot` writers) $ UNU.writeChan i ()
+  mapM_ wait rcvrs
+
+-- A slightly more realistic benchmark, lets us see effects of unboxed strict
+-- in value, and inlining effects w/ partially applied writeChan
+asyncSumIntUnagiNoBlockingUnboxed :: Int -> IO Int
+asyncSumIntUnagiNoBlockingUnboxed n = do
+   (i,o) <- UNU.newChan
+   let readerSum  0  !tot = return tot
+       readerSum !n' !tot = UNU.readChan (threadDelay 1) o 
+                              >>= readerSum (n'-1) . (tot+)
+   _ <- async $ mapM_ (UNU.writeChan i) [1..n] -- NOTE: partially-applied writeChan
+   readerSum n 0
+
+-- Unagi.NoBlocking.Unboxed Stream interface:
+asyncReadsWritesUnagiNoBlockingUnboxedStream :: Int -> Int -> Int -> IO ()
+asyncReadsWritesUnagiNoBlockingUnboxedStream writers readers n = do
+  -- A fairly reasonable heuristic: yield if we're oversubscribed, else do threadDelay:
+  procs <- getNumCapabilities
+  let pause = if (readers+writers) > procs then yield else threadDelay 1
+
+  let nNice = n - rem n (lcm writers readers)
+  (i,o) <- UNU.newChan
+  strms <- UNU.streamChan readers o
+  let doReads x str = when (x > 0) $ do
+        cns <- UNU.tryReadStream str
+        case cns of
+             UNU.Pending -> pause >> doReads x str
+             UNU.Cons _ str' -> doReads (x-1) str'
+  rcvrs <- mapM (async . doReads (nNice `quot` readers)) strms
+  _ <- replicateM writers $ async $ replicateM_ (nNice `quot` writers) $ UNU.writeChan i ()
+  mapM_ wait rcvrs
+
+-- A slightly more realistic benchmark, lets us see effects of unboxed strict
+-- in value, and inlining effects w/ partially applied writeChan
+asyncSumIntUnagiNoBlockingUnboxedStream :: Int -> IO Int
+asyncSumIntUnagiNoBlockingUnboxedStream n = do
+   (i,o) <- UNU.newChan
+   [ str0 ] <- UNU.streamChan 1 o
+   let readerSum  0  !tot _   = return tot
+       readerSum !n' !tot str = do 
+         cns <- UNU.tryReadStream str
+         case cns of
+              UNU.Pending -> threadDelay 1 >> readerSum n' tot str
+              UNU.Cons val str' -> readerSum (n'-1) (tot+val) str'
+   _ <- async $ mapM_ (UNU.writeChan i) [1..n] -- NOTE: partially-applied writeChan
    readerSum n 0 str0
 
 

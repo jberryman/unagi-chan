@@ -15,6 +15,7 @@ import Unagi
 import UnagiUnboxed
 import UnagiBounded
 import UnagiNoBlocking
+import UnagiNoBlockingUnboxed
 
 -- Other
 import Atomics
@@ -54,5 +55,6 @@ main = do
     unagiUnboxedMain
     unagiBoundedMain
     unagiNoBlockingMain
+    unagiNoBlockingUnboxedMain
 
     putStrLn "ALL TESTS PASSED!"

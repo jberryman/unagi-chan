@@ -42,6 +42,16 @@ smokeMain = (do
 
 
     putStrLn "==================="
+    putStrLn "Testing Unagi.NoBlocking.Unboxed:"
+    -- ------
+    putStr "    FIFO smoke test... "
+    fifoSmoke unagiNoBlockingUnboxedImpl 100000
+    putStrLn "OK"
+    -- ------
+    testContention unagiNoBlockingUnboxedImpl 2 2 1000000
+
+
+    putStrLn "==================="
     putStrLn "Testing Unagi.Unboxed:"
     -- ------
     putStr "    FIFO smoke test... "

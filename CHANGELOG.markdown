@@ -15,4 +15,5 @@
 
 ### 0.3.0.0
 
+- `Unagi.Unboxed` is now polymorphic in a new `UnagiPrim` class, which permits an optimization; defined instances are the same
 - revisit memory barriers in light of https://github.com/rrnewton/haskell-lockfree/issues/39, and document them better

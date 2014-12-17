@@ -35,6 +35,7 @@ import Control.Applicative
 import Data.Bits
 import Data.Typeable(Typeable)
 
+import Utilities(touchIORef)
 import Control.Concurrent.Chan.Unagi.Constants
 import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Types as UT
 
@@ -208,6 +209,35 @@ readChan io oc = tryReadChan oc >>= \el->
      in go
 
 
+-- TODO making this stream-agnostic:
+--   - as currently have it = ListT, but does this make sense? The "end of
+--     stream" simply indicates no more elements currently
+--      - does pipes provide functions that return continuation (so we can
+--        retry) on end of stream?
+--         - 'next' is useful for us
+--   - We could also have an agnostic function that does 'yield' and only calls
+--     mzero when isActive returns False.
+--
+--   - then add benchmarks with pipes/IOStreams
+--
+--
+--     TODO: Three streaming variants?:
+--       - a streamChan that blocks (need isActive to use an MVar) until writers exit, 
+--          which returns agostic ListT equivalent
+--       - an agnostic streaming version that only returns mzero when isActive returns False, else calling yield
+--       (both of above could use same concrete type instance, with accessor 'readStream')
+--       - existing version (with concrete type)
+--
+-- TODO a write-side equivalent:
+--   - can be made streaming agnostic?
+--   - NOTE: if we're only streaming in and out, then using multiple chans is
+--   possible (e.g. 3W6R is equivalent to 3 1:2 streaming chans)
+--
+-- TODO possible extension to streamChan
+--   - overload streamChan for Streams too.
+--
+
+
 -- | Produce the specified number of interleaved \"streams\" from a chan.
 -- Consuming a 'UI.Stream' is much faster than calling 'tryReadChan', and
 -- might be useful when an MPSC queue is needed, or when multiple consumers
@@ -243,7 +273,7 @@ streamChan period (OutChan _ (ChanEnd segSource counter streamHead)) = do
     -- Adapted from moveToNextCell, given a stream segment location `str0` and
     -- its offset, `offset0`, this navigates to the UT.Stream segment holding `ix`
     -- and begins recursing in our UT.Stream wrappers
-    let stream !offset0 str0 !ix = do
+    let stream !offset0 str0 !ix = UT.Stream $ do
             -- Find our stream segment and relative index:
             let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
                          divMod_sEGMENT_LENGTH $! (ix - offset0)
@@ -257,16 +287,15 @@ streamChan period (OutChan _ (ChanEnd segSource counter streamHead)) = do
             str@(Stream seg _) <- go segsAway str0
             let !strOffset = offset0+(segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH)  
             --                       (segsAway  *                 sEGMENT_LENGTH)
-            return $ UT.Stream $ do
-                mbA <- P.readArray seg segIx
-                case mbA of
-                     Nothing -> return UT.Pending
-                     -- Navigate to next cell and return this cell's value
-                     -- along with the wrapped action to read from the next
-                     -- cell and possibly recurse.
-                     Just a -> UT.Cons a <$> stream strOffset str (ix+period)
+            mbA <- P.readArray seg segIx
+            case mbA of
+                 Nothing -> return UT.Pending
+                 -- Navigate to next cell and return this cell's value
+                 -- along with the wrapped action to read from the next
+                 -- cell and possibly recurse.
+                 Just a -> return $ UT.Cons a $ stream strOffset str (ix+period)
 
-    mapM (stream offsetInitial strInitial) $
+    return $ map (stream offsetInitial strInitial) $
      -- [ix0..(ix0+period-1)] -- WRONG (hint: overflow)!
         take period $ iterate (+1) ix0
 
@@ -275,6 +304,7 @@ streamChan period (OutChan _ (ChanEnd segSource counter streamHead)) = do
 --      to parameterize those functions and types by 'Cell a' rather than 'a'.
 --      And use the version of moveToNextCell here, which returns the update
 --      continuation.
+--       - and N.B. touchIORef in moveToNextCell!
 
 -- increments counter, finds stream segment of corresponding cell (updating the
 -- stream head pointer as needed), and returns the stream segment and relative
@@ -293,12 +323,16 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
             waitingAdvanceStream next segSource (nEW_SEGMENT_WAIT*segIx)
               >>= go (n-1)
     str <- go segsAway str0
-    let !maybeUpdateStreamHead = 
+    let !maybeUpdateStreamHead = do
           when (segsAway > 0) $ do
             let !offsetN = 
                   offset0 + (segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH) --(segsAway*sEGMENT_LENGTH)
             writeIORef streamHead $ StreamHead offsetN str
+          touchIORef streamHead -- NOTE [1]
     return (segIx,str, maybeUpdateStreamHead)
+  -- [1] This helps ensure that our (possibly last) use of streamHead occurs
+  -- after our (possibly last) write, for correctness of 'isActive'.  See NOTE
+  -- 1 of 'writeChan'
 
 
 -- thread-safely try to fill `nextSegRef` at the next offset with a new

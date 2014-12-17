@@ -52,12 +52,14 @@ library
                      , Control.Concurrent.Chan.Unagi.Unboxed
                      , Control.Concurrent.Chan.Unagi.Bounded
                      , Control.Concurrent.Chan.Unagi.NoBlocking
+                     , Control.Concurrent.Chan.Unagi.NoBlocking.Unboxed
 
   other-modules:       Control.Concurrent.Chan.Unagi.Internal
                      , Control.Concurrent.Chan.Unagi.Unboxed.Internal
                      , Control.Concurrent.Chan.Unagi.Bounded.Internal
                      , Control.Concurrent.Chan.Unagi.NoBlocking.Internal
                      , Control.Concurrent.Chan.Unagi.NoBlocking.Types
+                     , Control.Concurrent.Chan.Unagi.NoBlocking.Unboxed.Internal
                      , Control.Concurrent.Chan.Unagi.Constants
                      , Utilities
                      , Data.Atomics.Counter.Fat
@@ -68,11 +70,14 @@ library
                      -- we're fine with any version that passes our tests:
                      , atomic-primops >= 0.6.0.5 && <= 0.6.0.6
                      , primitive>=0.5.3
+                     , ghc-prim
   default-language:    Haskell2010
   
-  -- We'll need some additional barriers for correctness:
   if !arch(i386) && !arch(x86_64)
     cpp-options: -DNOT_x86
+  -- TODO: more complete list of 64-bit archs:
+  if arch(x86_64)
+    cpp-options: -DIS_64_BIT
 
   -- tryReadMVar is only available and non-broken on ghc >= 7.8.3
   if impl(ghc >= 7.8.3)
@@ -82,7 +87,6 @@ library
 --  - For GHC 7.10+
 --     - look at small arrays (w/out card-marking)
 --     - re-benchmark array creation and adjust next segment wait
---     - if we get clarity on whether atomic ops are barriers then we may be able to remove some of our explicit barriers
 --  - Do a benchmark of multiple queues running in parallel, to see if we are
 --     affected by global allocator issues with pinned memory:
 --     http://thread.gmane.org/gmane.comp.lang.haskell.parallel/218
@@ -102,6 +106,9 @@ test-suite test
   ghc-options: -Wall -funbox-strict-fields
   ghc-options: -O2  -rtsopts  -threaded -with-rtsopts=-N
   ghc-options: -fno-ignore-asserts
+  -- for some hacks for Addr:
+  ghc-options: -fno-warn-orphans 
+  ghc-options: -fno-warn-missing-methods
   -- I guess we need to put 'src' here to get access to Internal modules
   hs-source-dirs: tests, src
   main-is: Main.hs
@@ -118,11 +125,14 @@ test-suite test
                      , primitive>=0.5.3
                      , atomic-primops >= 0.6.0.5 && <= 0.6.0.6
                      , containers
+                     , ghc-prim
   default-language:    Haskell2010
   
   -- These have to be copied from 'library' section too!
   if !arch(i386) && !arch(x86_64)
     cpp-options: -DNOT_x86
+  if arch(x86_64)
+    cpp-options: -DIS_64_BIT
  
   if impl(ghc >= 7.8.3)
     cpp-options: -DTRYREADMVAR
