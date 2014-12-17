@@ -8,6 +8,7 @@ import qualified Control.Concurrent.Chan.Unagi as U
 import qualified Control.Concurrent.Chan.Unagi.Unboxed as UU
 import qualified Control.Concurrent.Chan.Unagi.Bounded as UB
 import qualified Control.Concurrent.Chan.Unagi.NoBlocking as UN
+import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Unboxed as UNU
 
 import qualified Control.Concurrent.Chan as C
 import qualified Control.Concurrent.STM.TQueue as S
@@ -36,7 +37,8 @@ main = do
     -- runUU (read n)
     -- runUB (read n)
     -- runUN (read n)
-    runUNStream (read n)
+    -- runUNStream (read n)
+    runUNUStream (read n)
 {-
 runU :: Int -> IO ()
 runU n = do
@@ -76,7 +78,6 @@ runUN n = do
   replicateM_ 1000 $ do
     replicateM_ n1000 $ UN.writeChan i ()
     replicateM_ n1000 $ tryReadChanErrUN o
- -}
 
 runUNStream n = do
   (i,o) <- UN.newChan
@@ -89,6 +90,34 @@ runUNStream n = do
                UN.Cons _ str' -> eat str'
       writeAndEat iter str = unless (iter <=0) $ do
           replicateM_ n1000 $ UN.writeChan i ()
+          eat str >>= writeAndEat (iter-1)
+        
+  writeAndEat (1000::Int) oStream
+ -}
+tryReadChanErrUNU :: UNU.UnagiPrim a=> UNU.OutChan a -> IO a
+{-# INLINE tryReadChanErrUNU #-}
+tryReadChanErrUNU oc = UNU.tryReadChan oc 
+                    >>= UNU.peekElement 
+                    >>= maybe (error "A read we expected to succeed failed!") return
+
+runUNU n = do
+  (i,o) <- UNU.newChan
+  let n1000 = n `quot` 1000
+  replicateM_ 1000 $ do
+    replicateM_ n1000 $ UNU.writeChan i (0::Int)
+    replicateM_ n1000 $ tryReadChanErrUNU o
+
+runUNUStream n = do
+  (i,o) <- UNU.newChan
+  [ oStream ] <- UNU.streamChan 1 o
+  let n1000 = n `quot` 1000
+  let eat str = do
+          x <- UNU.tryReadStream str
+          case x of
+               UNU.Pending -> return str
+               UNU.Cons _ str' -> eat str'
+      writeAndEat iter str = unless (iter <=0) $ do
+          replicateM_ n1000 $ UNU.writeChan i (0::Int)
           eat str >>= writeAndEat (iter-1)
         
   writeAndEat (1000::Int) oStream
