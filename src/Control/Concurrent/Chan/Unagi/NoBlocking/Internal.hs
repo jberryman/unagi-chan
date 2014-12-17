@@ -218,6 +218,8 @@ readChan io oc = tryReadChan oc >>= \el->
 --   - We could also have an agnostic function that does 'yield' and only calls
 --     mzero when isActive returns False.
 --
+--   - then add benchmarks with pipes/IOStreams
+--
 --
 --     TODO: Three streaming variants?:
 --       - a streamChan that blocks (need isActive to use an MVar) until writers exit, 
@@ -225,6 +227,15 @@ readChan io oc = tryReadChan oc >>= \el->
 --       - an agnostic streaming version that only returns mzero when isActive returns False, else calling yield
 --       (both of above could use same concrete type instance, with accessor 'readStream')
 --       - existing version (with concrete type)
+--
+-- TODO a write-side equivalent:
+--   - can be made streaming agnostic?
+--   - NOTE: if we're only streaming in and out, then using multiple chans is
+--   possible (e.g. 3W6R is equivalent to 3 1:2 streaming chans)
+--
+-- TODO possible extension to streamChan
+--   - overload streamChan for Streams too.
+--
 
 
 -- | Produce the specified number of interleaved \"streams\" from a chan.
@@ -293,6 +304,7 @@ streamChan period (OutChan _ (ChanEnd segSource counter streamHead)) = do
 --      to parameterize those functions and types by 'Cell a' rather than 'a'.
 --      And use the version of moveToNextCell here, which returns the update
 --      continuation.
+--       - and N.B. touchIORef in moveToNextCell!
 
 -- increments counter, finds stream segment of corresponding cell (updating the
 -- stream head pointer as needed), and returns the stream segment and relative

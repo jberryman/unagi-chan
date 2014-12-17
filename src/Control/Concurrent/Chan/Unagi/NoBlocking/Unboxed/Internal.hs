@@ -23,18 +23,6 @@ module Control.Concurrent.Chan.Unagi.NoBlocking.Unboxed.Internal
 -- Some detailed NOTEs present in Control.Concurrent.Chan.Unagi.Unboxed have
 -- been removed here although they still pertain. If you intend to work on this
 -- module, please be sure you're familiar with those concerns.
---
--- TODO:
---   - Unboxed variant:
---       The "empty" cell is a magic number (somewhere far from both maxBound
---       and minBound), and need parallel array segment (actually use a cell
---       adjacent) used for disambiguating an empty cell from a written cell
---       that happens to equal magic number. Reader paths:
---          - read "non-empty" element cell value
---          - read "empty" valued cell, loadLoadBarrier (necessary?), read signal cell to ensure not magic-valued (and rarely: another barrier and re-read)
---       Writer paths:
---          - write to element cell
---          - if (hopefully) rare magic value, write "written" to signal cell
 
 import Data.IORef
 import Control.Exception

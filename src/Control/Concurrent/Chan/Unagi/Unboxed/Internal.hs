@@ -167,7 +167,8 @@ segSource = do
     -- corresponding barrier is needed in waitingAdvanceStream.
 
 
--- | Our class of types supporting primitive array operations
+-- | Our class of types supporting primitive array operations. Instance method
+-- definitions are architecture-dependent.
 class (P.Prim a, Eq a)=> UnagiPrim a where
     -- | When the read and write operations of the underlying @Prim@ instances
     -- on aligned memory are atomic, this may be set to @Just x@ where @x@ is
