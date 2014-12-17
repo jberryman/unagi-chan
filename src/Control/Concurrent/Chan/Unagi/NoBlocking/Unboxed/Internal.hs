@@ -55,7 +55,7 @@ import Control.Concurrent.Chan.Unagi.Unboxed.Internal(
           ChanEnd(..), StreamHead(..), Cell, Stream(..)
         , NextSegment(..), moveToNextCell, waitingAdvanceStream, segSource
         , cellEmpty, readElementArray, writeElementArray
-        , UnagiPrim(..))
+        , SignalIntArray, ElementArray, UnagiPrim(..))
 import Control.Concurrent.Chan.Unagi.NoBlocking(
           Element(..))
 import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Types as UT
@@ -204,7 +204,12 @@ tryReadChan :: UnagiPrim a=> OutChan a -> IO (Element a)
 tryReadChan (OutChan _ ce) = do  -- see NoBlocking re. not masking
     (segIx, (Stream sigArr eArr _ _), maybeUpdateStreamHead) <- moveToNextCell ce
     maybeUpdateStreamHead
-    return $ Element $ do
+    return $ Element $ 
+        tryReadChanInternals segIx sigArr eArr
+
+tryReadChanInternals :: UnagiPrim a=> Int -> SignalIntArray -> ElementArray a -> IO (Maybe a)
+{-# INLINE tryReadChanInternals #-}
+tryReadChanInternals segIx sigArr eArr = do
       let readElem = readElementArray eArr segIx
           slowRead = do 
              sig <- P.readByteArray sigArr segIx
@@ -298,23 +303,10 @@ streamChan period (OutChan _ (ChanEnd counter streamHead)) = do
             let !strOffset = offset0+(segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH)  
             --                       (segsAway  *                 sEGMENT_LENGTH)
             -- Adapted from tryReadChan TODO benchmark and try to factor out:
-            let readElem = readElementArray eArr segIx
-                consAndStream el = return $ UT.Cons el $ stream strOffset str (ix+period)
-                slowRead = do 
-                   sig <- P.readByteArray sigArr segIx
-                   if sig == nonMagicCellWritten
-                     then do 
-                       loadLoadBarrier
-                       readElem >>= consAndStream
-                     else assert (sig == cellEmpty) $
-                       return UT.Pending
-            case atomicUnicorn of
-                 Just magic -> do
-                    el <- readElem
-                    if (el /= magic) 
-                      then consAndStream el
-                      else slowRead
-                 Nothing -> slowRead
+            mbEl <- tryReadChanInternals segIx sigArr eArr
+            return $ case mbEl of
+                 Nothing -> UT.Pending
+                 Just el -> UT.Cons el $ stream strOffset str (ix+period)
 
     return $ map (stream offsetInitial strInitial) $
      -- [ix0..(ix0+period-1)] -- WRONG (hint: overflow)!
