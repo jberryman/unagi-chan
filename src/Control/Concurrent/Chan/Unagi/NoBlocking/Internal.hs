@@ -262,7 +262,7 @@ streamChan period (OutChan _ (ChanEnd segSource counter streamHead)) = do
     -- Adapted from moveToNextCell, given a stream segment location `str0` and
     -- its offset, `offset0`, this navigates to the UT.Stream segment holding `ix`
     -- and begins recursing in our UT.Stream wrappers
-    let stream !offset0 str0 !ix = do
+    let stream !offset0 str0 !ix = UT.Stream $ do
             -- Find our stream segment and relative index:
             let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
                          divMod_sEGMENT_LENGTH $! (ix - offset0)
@@ -276,16 +276,15 @@ streamChan period (OutChan _ (ChanEnd segSource counter streamHead)) = do
             str@(Stream seg _) <- go segsAway str0
             let !strOffset = offset0+(segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH)  
             --                       (segsAway  *                 sEGMENT_LENGTH)
-            return $ UT.Stream $ do
-                mbA <- P.readArray seg segIx
-                case mbA of
-                     Nothing -> return UT.Pending
-                     -- Navigate to next cell and return this cell's value
-                     -- along with the wrapped action to read from the next
-                     -- cell and possibly recurse.
-                     Just a -> UT.Cons a <$> stream strOffset str (ix+period)
+            mbA <- P.readArray seg segIx
+            case mbA of
+                 Nothing -> return UT.Pending
+                 -- Navigate to next cell and return this cell's value
+                 -- along with the wrapped action to read from the next
+                 -- cell and possibly recurse.
+                 Just a -> return $ UT.Cons a $ stream strOffset str (ix+period)
 
-    mapM (stream offsetInitial strInitial) $
+    return $ map (stream offsetInitial strInitial) $
      -- [ix0..(ix0+period-1)] -- WRONG (hint: overflow)!
         take period $ iterate (+1) ix0
 

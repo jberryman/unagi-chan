@@ -283,7 +283,7 @@ streamChan period (OutChan _ (ChanEnd counter streamHead)) = do
     -- Adapted from moveToNextCell, given a stream segment location `str0` and
     -- its offset, `offset0`, this navigates to the UT.Stream segment holding `ix`
     -- and begins recursing in our UT.Stream wrappers
-    let stream !offset0 str0 !ix = do
+    let stream !offset0 str0 !ix = UT.Stream $ do
             -- Find our stream segment and relative index:
             let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
                          divMod_sEGMENT_LENGTH $! (ix - offset0)
@@ -297,26 +297,25 @@ streamChan period (OutChan _ (ChanEnd counter streamHead)) = do
             str@(Stream sigArr eArr _ _) <- go segsAway str0
             let !strOffset = offset0+(segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH)  
             --                       (segsAway  *                 sEGMENT_LENGTH)
-            return $ UT.Stream $ do
-              -- Adapted from tryReadChan TODO benchmark and try to factor out:
-              let readElem = readElementArray eArr segIx
-                  consAndStream el = UT.Cons el <$> stream strOffset str (ix+period)
-                  slowRead = do 
-                     sig <- P.readByteArray sigArr segIx
-                     if sig == nonMagicCellWritten
-                       then do 
-                         loadLoadBarrier
-                         readElem >>= consAndStream
-                       else assert (sig == cellEmpty) $
-                         return UT.Pending
-              case atomicUnicorn of
-                   Just magic -> do
-                      el <- readElem
-                      if (el /= magic) 
-                        then consAndStream el
-                        else slowRead
-                   Nothing -> slowRead
+            -- Adapted from tryReadChan TODO benchmark and try to factor out:
+            let readElem = readElementArray eArr segIx
+                consAndStream el = return $ UT.Cons el $ stream strOffset str (ix+period)
+                slowRead = do 
+                   sig <- P.readByteArray sigArr segIx
+                   if sig == nonMagicCellWritten
+                     then do 
+                       loadLoadBarrier
+                       readElem >>= consAndStream
+                     else assert (sig == cellEmpty) $
+                       return UT.Pending
+            case atomicUnicorn of
+                 Just magic -> do
+                    el <- readElem
+                    if (el /= magic) 
+                      then consAndStream el
+                      else slowRead
+                 Nothing -> slowRead
 
-    mapM (stream offsetInitial strInitial) $
+    return $ map (stream offsetInitial strInitial) $
      -- [ix0..(ix0+period-1)] -- WRONG (hint: overflow)!
         take period $ iterate (+1) ix0
