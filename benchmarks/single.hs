@@ -144,7 +144,7 @@ runtestSplitChanUNStream1 n = do
   replicateM_ n $ UN.writeChan i ()
   -- consume until we hit empty:
   let eat str = do
-          x <- UN.tryReadStream str
+          x <- UN.tryNext str
           case x of
                UN.Pending -> return ()
                UN.Cons _ str' -> eat str'
@@ -155,7 +155,7 @@ runtestSplitChanUNStream2 n = do
   [ oStream ] <- UN.streamChan 1 o
   let n1000 = n `quot` 1000
   let eat str = do
-          x <- UN.tryReadStream str
+          x <- UN.tryNext str
           case x of
                UN.Pending -> return str
                UN.Cons _ str' -> eat str'
@@ -188,7 +188,7 @@ runtestSplitChanUNUStream1 n = do
   replicateM_ n $ UNU.writeChan i (0::Int)
   -- consume until we hit empty:
   let eat str = do
-          x <- UNU.tryReadStream str
+          x <- UNU.tryNext str
           case x of
                UNU.Pending -> return ()
                UNU.Cons _ str' -> eat str'
@@ -199,7 +199,7 @@ runtestSplitChanUNUStream2 n = do
   [ oStream ] <- UNU.streamChan 1 o
   let n1000 = n `quot` 1000
   let eat str = do
-          x <- UNU.tryReadStream str
+          x <- UNU.tryNext str
           case x of
                UNU.Pending -> return str
                UNU.Cons _ str' -> eat str'

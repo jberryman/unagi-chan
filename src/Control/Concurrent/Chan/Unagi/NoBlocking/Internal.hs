@@ -116,9 +116,9 @@ newChanStarting !startingCellOffset = do
 -- writers.
 --
 -- After @False@ is returned, any 'peekElement' which returns @Nothing@ can be
--- considered to be dead. Note that in the blocking implementations a
--- @BlockedIndefinitelyOnMVar@ exception is raised, so this function is
--- unnecessary.
+-- considered to be dead. Likewise for 'UT.tryNext'. Note that in the blocking
+-- implementations a @BlockedIndefinitelyOnMVar@ exception is raised, so this
+-- function is unnecessary.
 isActive :: OutChan a -> IO Bool
 isActive (OutChan finalizee _) = do
     b <- readIORef finalizee
@@ -209,24 +209,17 @@ readChan io oc = tryReadChan oc >>= \el->
      in go
 
 
--- TODO making this stream-agnostic:
---   - as currently have it = ListT, but does this make sense? The "end of
---     stream" simply indicates no more elements currently
---      - does pipes provide functions that return continuation (so we can
---        retry) on end of stream?
---         - 'next' is useful for us
---   - We could also have an agnostic function that does 'yield' and only calls
---     mzero when isActive returns False.
---
---   - then add benchmarks with pipes/IOStreams
 --
 --
 --     TODO: Three streaming variants?:
 --       - a streamChan that blocks (need isActive to use an MVar) until writers exit, 
 --          which returns agostic ListT equivalent
+--           - NO: we could provide a blocking isActive, but otherwise this is equivalent to below
 --       - an agnostic streaming version that only returns mzero when isActive returns False, else calling yield
 --       (both of above could use same concrete type instance, with accessor 'readStream')
 --       - existing version (with concrete type)
+--   
+--   - then add benchmarks with pipes/IOStreams
 --
 -- TODO a write-side equivalent:
 --   - can be made streaming agnostic?
@@ -237,6 +230,7 @@ readChan io oc = tryReadChan oc >>= \el->
 --   - overload streamChan for Streams too.
 --
 
+-- TODO THIS SHOULD PROBABLY BE RENAMED TO streamChanTrying THEN HAVE streamChan BE PASSED AN IO ()
 
 -- | Produce the specified number of interleaved \"streams\" from a chan.
 -- Consuming a 'UI.Stream' is much faster than calling 'tryReadChan', and
@@ -252,12 +246,12 @@ readChan io oc = tryReadChan oc >>= \el->
 -- >    forkIO $ printStream str3   -- prints: 3,6,9
 -- >  where 
 -- >    printStream str = do
--- >      h <- 'tryReadStream' str
+-- >      h <- 'tryNext' str
 -- >      case h of
 -- >        'Cons' a str' -> print a >> printStream str'
 -- >        -- We know that all values were already written, so a Pending tells 
 -- >        -- us we can exit; in other cases we might call 'yield' and then 
--- >        -- retry that same @'tryReadStream' str@:
+-- >        -- retry that same @'tryNext' str@:
 -- >        'Pending' -> return ()
 streamChan :: Int -> OutChan a -> IO [UT.Stream a]
 {-# INLINE streamChan #-}

@@ -191,7 +191,7 @@ asyncReadsWritesUnagiNoBlockingStream writers readers n = do
   (i,o) <- UN.newChan
   strms <- UN.streamChan readers o
   let doReads x str = when (x > 0) $ do
-        cns <- UN.tryReadStream str
+        cns <- UN.tryNext str
         case cns of
              UN.Pending -> pause >> doReads x str
              UN.Cons _ str' -> doReads (x-1) str'
@@ -207,7 +207,7 @@ asyncSumIntUnagiNoBlockingStream n = do
    [ str0 ] <- UN.streamChan 1 o
    let readerSum  0  !tot _   = return tot
        readerSum !n' !tot str = do 
-         cns <- UN.tryReadStream str
+         cns <- UN.tryNext str
          case cns of
               UN.Pending -> threadDelay 1 >> readerSum n' tot str
               UN.Cons val str' -> readerSum (n'-1) (tot+val) str'
@@ -255,7 +255,7 @@ asyncReadsWritesUnagiNoBlockingUnboxedStream writers readers n = do
   (i,o) <- UNU.newChan
   strms <- UNU.streamChan readers o
   let doReads x str = when (x > 0) $ do
-        cns <- UNU.tryReadStream str
+        cns <- UNU.tryNext str
         case cns of
              UNU.Pending -> pause >> doReads x str
              UNU.Cons _ str' -> doReads (x-1) str'
@@ -271,7 +271,7 @@ asyncSumIntUnagiNoBlockingUnboxedStream n = do
    [ str0 ] <- UNU.streamChan 1 o
    let readerSum  0  !tot _   = return tot
        readerSum !n' !tot str = do 
-         cns <- UNU.tryReadStream str
+         cns <- UNU.tryNext str
          case cns of
               UNU.Pending -> threadDelay 1 >> readerSum n' tot str
               UNU.Cons val str' -> readerSum (n'-1) (tot+val) str'

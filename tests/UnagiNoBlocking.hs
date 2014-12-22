@@ -294,7 +294,7 @@ streamChanSmoke =
       unless ((sort $ concat parts) == [1..payload]) $
         error $ "Somehow read parts weren't what we expected: "++(show parts)
    where consumeUntilEmpty stack (strm,v) = do
-           h <- tryReadStream strm
+           h <- tryNext strm
            case h of
              (Cons x xs) -> consumeUntilEmpty (x:stack) (xs,v)
              Pending -> putMVar v stack -- Done
@@ -309,7 +309,7 @@ streamChanConcurrentStreamerWriter n = do
           | failCnt > 4 = putMVar v $ Left "failCnt exceeded; possibly bug, but probably anomaly"
           | itr > n = putMVar v $ Right stack
           | otherwise = do
-              xs <- tryReadStream s
+              xs <- tryNext s
               case xs of
                 Pending -> threadDelay 1000 >> streamReader s stack itr (failCnt+1)
                 Cons x xs' -> streamReader xs' (x:stack) (itr+1) 0
@@ -328,7 +328,7 @@ streamChanConcurrentStreamerReader n = do
     vStream <- newEmptyMVar
     vOutchan <- newEmptyMVar
     let streamReader s stack = do
-          xs <- tryReadStream s
+          xs <- tryNext s
           case xs of
             Pending -> putMVar vStream stack
             Cons x xs' -> streamReader xs' (x:stack)

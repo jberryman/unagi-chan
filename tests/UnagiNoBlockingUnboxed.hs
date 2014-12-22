@@ -118,21 +118,21 @@ magicSmokeStream (Just magic) = do
     case strms of
          [strm1,strm2] -> do
             writeChan i magic
-            h <- tryReadStream strm1
+            h <- tryNext strm1
             case h of
               Pending -> error "magicSmokeStream: strm1 pending!"
               (Cons x1 xs1) -> do
                 unless (x1 == magic) $ error "magicSmokeStream: x1 /= magic"
-                h2 <- tryReadStream strm2
+                h2 <- tryNext strm2
                 case h2 of
                   (Cons _ _) -> error "magicSmokeStream: h2 /= Pending!"
                   _ -> do writeChan i magic
-                          h2' <- tryReadStream strm2
+                          h2' <- tryNext strm2
                           case h2' of
                             Pending -> error "h2' == Pending!"
                             Cons x2 _ -> do 
                               unless (x2 == magic) $ error "x2 /= magic"
-                              h' <- tryReadStream xs1
+                              h' <- tryNext xs1
                               case h' of
                                 (Cons _ _) -> error "magicSmokeStream: h' /= Pending!"
                                 Pending -> return ()
@@ -297,7 +297,7 @@ streamChanSmoke =
       unless ((sort $ concat parts) == [1..payload]) $
         error $ "Somehow read parts weren't what we expected: "++(show parts)
    where consumeUntilEmpty stack (strm,v) = do
-           h <- tryReadStream strm
+           h <- tryNext strm
            case h of
              (Cons x xs) -> consumeUntilEmpty (x:stack) (xs,v)
              Pending -> putMVar v stack -- Done
@@ -312,7 +312,7 @@ streamChanConcurrentStreamerWriter n = do
           | failCnt > 4 = putMVar v $ Left "failCnt exceeded; possibly bug, but probably anomaly"
           | itr > n = putMVar v $ Right stack
           | otherwise = do
-              xs <- tryReadStream s
+              xs <- tryNext s
               case xs of
                 Pending -> threadDelay 1000 >> streamReader s stack itr (failCnt+1)
                 Cons x xs' -> streamReader xs' (x:stack) (itr+1) 0
@@ -331,7 +331,7 @@ streamChanConcurrentStreamerReader n = do
     vStream <- newEmptyMVar
     vOutchan <- newEmptyMVar
     let streamReader s stack = do
-          xs <- tryReadStream s
+          xs <- tryNext s
           case xs of
             Pending -> putMVar vStream stack
             Cons x xs' -> streamReader xs' (x:stack)

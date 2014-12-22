@@ -84,7 +84,7 @@ runUNStream n = do
   [ oStream ] <- UN.streamChan 1 o
   let n1000 = n `quot` 1000
   let eat str = do
-          x <- UN.tryReadStream str
+          x <- UN.tryNext str
           case x of
                UN.Pending -> return str
                UN.Cons _ str' -> eat str'
@@ -112,7 +112,7 @@ runUNUStream n = do
   [ oStream ] <- UNU.streamChan 1 o
   let n1000 = n `quot` 1000
   let eat str = do
-          x <- UNU.tryReadStream str
+          x <- UNU.tryNext str
           case x of
                UNU.Pending -> return str
                UNU.Cons _ str' -> eat str'

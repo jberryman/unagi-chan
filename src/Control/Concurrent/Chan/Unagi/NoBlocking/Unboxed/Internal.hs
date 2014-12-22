@@ -98,9 +98,9 @@ newChanStarting !startingCellOffset = do
 -- writers.
 --
 -- After @False@ is returned, any 'peekElement' which returns @Nothing@ can be
--- considered to be dead. Note that in the blocking implementations a
--- @BlockedIndefinitelyOnMVar@ exception is raised, so this function is
--- unnecessary.
+-- considered to be dead. Likewise for 'UT.tryNext'. Note that in the blocking
+-- implementations a @BlockedIndefinitelyOnMVar@ exception is raised, so this
+-- function is unnecessary.
 isActive :: OutChan a -> IO Bool
 isActive (OutChan finalizee _) = do
     b <- readIORef finalizee
@@ -255,12 +255,12 @@ readChan io oc = tryReadChan oc >>= \el->
 -- >    forkIO $ printStream str3   -- prints: 3,6,9
 -- >  where 
 -- >    printStream str = do
--- >      h <- 'tryReadStream' str
+-- >      h <- 'tryNext' str
 -- >      case h of
 -- >        'Cons' a str' -> print a >> printStream str'
 -- >        -- We know that all values were already written, so a Pending tells 
 -- >        -- us we can exit; in other cases we might call 'yield' and then 
--- >        -- retry that same @'tryReadStream' str@:
+-- >        -- retry that same @'tryNext' str@:
 -- >        'Pending' -> return ()
 streamChan :: UnagiPrim a=> Int -> OutChan a -> IO [UT.Stream a]
 {-# INLINE streamChan #-}
