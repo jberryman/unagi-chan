@@ -147,7 +147,6 @@ nonMagicCellWritten = 1
 
 
 --  TODO
---    - UNRELATED: check out sizeMutableArray from GHC.Prim for Bounded (rather than storing ourselves)!
 --    - UNRELATED: in Counter.Fat, make constant a constant with the let/in/assert trick
 --         - Double check that actually works by looking at core!
 
