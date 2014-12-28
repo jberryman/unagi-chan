@@ -33,13 +33,12 @@ main = do
 
 main = do
     [n] <- getArgs
-    -- runU (read n)
+    runU (read n)
     -- runUU (read n)
     -- runUB (read n)
     -- runUN (read n)
     -- runUNStream (read n)
-    runUNUStream (read n)
-{-
+    -- runUNUStream (read n)
 runU :: Int -> IO ()
 runU n = do
   (i,o) <- U.newChan
@@ -47,7 +46,6 @@ runU n = do
   replicateM_ 1000 $ do
     replicateM_ n1000 $ U.writeChan i ()
     replicateM_ n1000 $ U.readChan o
- -}
 {-
 runUU :: Int -> IO ()
 runUU n = do
@@ -69,7 +67,7 @@ runUB n = do
 tryReadChanErrUN :: UN.OutChan a -> IO a
 {-# INLINE tryReadChanErrUN #-}
 tryReadChanErrUN oc = UN.tryReadChan oc 
-                    >>= UN.peekElement 
+                    >>= UN.tryRead 
                     >>= maybe (error "A read we expected to succeed failed!") return
 
 runUN n = do
@@ -84,10 +82,10 @@ runUNStream n = do
   [ oStream ] <- UN.streamChan 1 o
   let n1000 = n `quot` 1000
   let eat str = do
-          x <- UN.tryNext str
+          x <- UN.tryReadNext str
           case x of
                UN.Pending -> return str
-               UN.Cons _ str' -> eat str'
+               UN.Next _ str' -> eat str'
       writeAndEat iter str = unless (iter <=0) $ do
           replicateM_ n1000 $ UN.writeChan i ()
           eat str >>= writeAndEat (iter-1)
@@ -97,7 +95,7 @@ runUNStream n = do
 tryReadChanErrUNU :: UNU.UnagiPrim a=> UNU.OutChan a -> IO a
 {-# INLINE tryReadChanErrUNU #-}
 tryReadChanErrUNU oc = UNU.tryReadChan oc 
-                    >>= UNU.peekElement 
+                    >>= UNU.tryRead 
                     >>= maybe (error "A read we expected to succeed failed!") return
 
 runUNU n = do
@@ -112,10 +110,10 @@ runUNUStream n = do
   [ oStream ] <- UNU.streamChan 1 o
   let n1000 = n `quot` 1000
   let eat str = do
-          x <- UNU.tryNext str
+          x <- UNU.tryReadNext str
           case x of
                UNU.Pending -> return str
-               UNU.Cons _ str' -> eat str'
+               UNU.Next _ str' -> eat str'
       writeAndEat iter str = unless (iter <=0) $ do
           replicateM_ n1000 $ UNU.writeChan i (0::Int)
           eat str >>= writeAndEat (iter-1)

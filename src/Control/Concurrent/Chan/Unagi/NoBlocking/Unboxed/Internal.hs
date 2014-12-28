@@ -6,7 +6,7 @@ module Control.Concurrent.Chan.Unagi.NoBlocking.Unboxed.Internal
     (sEGMENT_LENGTH
     , InChan(..), OutChan(..), ChanEnd(..), Cell, Stream(..)
     , NextSegment(..), StreamHead(..)
-    , newChanStarting, writeChan, tryReadChan, readChan, Element(..)
+    , newChanStarting, writeChan, tryReadChan, readChan, UT.Element(..)
     , dupChan
     , streamChan
     , isActive
@@ -44,8 +44,6 @@ import Control.Concurrent.Chan.Unagi.Unboxed.Internal(
         , NextSegment(..), moveToNextCell, waitingAdvanceStream, segSource
         , cellEmpty, readElementArray, writeElementArray
         , SignalIntArray, ElementArray, UnagiPrim(..))
-import Control.Concurrent.Chan.Unagi.NoBlocking(
-          Element(..))
 import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Types as UT
 
 
@@ -97,14 +95,14 @@ newChanStarting !startingCellOffset = do
 -- | An action that returns @False@ sometime after the chan no longer has any
 -- writers.
 --
--- After @False@ is returned, any 'peekElement' which returns @Nothing@ can be
--- considered to be dead. Likewise for 'UT.tryNext'. Note that in the blocking
--- implementations a @BlockedIndefinitelyOnMVar@ exception is raised, so this
--- function is unnecessary.
+-- After @False@ is returned, any 'UT.tryRead' which returns @Nothing@ can
+-- be considered to be dead. Likewise for 'UT.tryReadNext'. Note that in the
+-- blocking implementations a @BlockedIndefinitelyOnMVar@ exception is raised,
+-- so this function is unnecessary.
 isActive :: OutChan a -> IO Bool
 isActive (OutChan finalizee _) = do
     b <- readIORef finalizee
-    -- make sure that a peekElement that follows is not moved ahead:
+    -- make sure that a tryRead that follows is not moved ahead:
     loadLoadBarrier 
     return b
 
@@ -175,18 +173,18 @@ writeChan (InChan _ ce) = \a-> mask_ $ do
   -- above. See definition of maybeUpdateStreamHead.
 
 
--- | Read an element from the chan, returning an @'Element' a@ future which
--- returns an actual element, when available, via 'peekElement'.
+-- | Returns immediately with an @'UT.Element' a@ future, which returns one
+-- unique element when it becomes available via 'UT.tryRead'.
 --
 -- /Note re. exceptions/: When an async exception is raised during a @tryReadChan@ 
 -- the message that the read would have returned is likely to be lost, just as
 -- it would be when raised directly after this function returns.
-tryReadChan :: UnagiPrim a=> OutChan a -> IO (Element a)
+tryReadChan :: UnagiPrim a=> OutChan a -> IO (UT.Element a)
 {-# INLINE tryReadChan #-}
 tryReadChan (OutChan _ ce) = do  -- see NoBlocking re. not masking
     (segIx, (Stream sigArr eArr _ _), maybeUpdateStreamHead) <- moveToNextCell ce
     maybeUpdateStreamHead
-    return $ Element $ 
+    return $ UT.Element $ 
         tryReadChanInternals segIx sigArr eArr
 
 tryReadChanInternals :: UnagiPrim a=> Int -> SignalIntArray -> ElementArray a -> IO (Maybe a)
@@ -215,7 +213,7 @@ tryReadChanInternals segIx sigArr eArr = do
  
 
 -- | @readChan io c@ returns the next element from @c@, calling 'tryReadChan'
--- and looping on the 'Element' returned, and calling @io@ at each iteration
+-- and looping on the 'UT.Element' returned, and calling @io@ at each iteration
 -- when the element is not yet available. It throws 'BlockedIndefinitelyOnMVar'
 -- when 'isActive' determines that a value will never be returned.
 --
@@ -225,7 +223,7 @@ tryReadChanInternals segIx sigArr eArr = do
 readChan :: UnagiPrim a=> IO () -> OutChan a -> IO a
 {-# INLINE readChan #-}
 readChan io oc = tryReadChan oc >>= \el->
-    let peekMaybe f = peekElement el >>= maybe f return 
+    let peekMaybe f = UT.tryRead el >>= maybe f return 
         go = peekMaybe checkAndGo
         checkAndGo = do 
             b <- isActive oc
@@ -236,7 +234,7 @@ readChan io oc = tryReadChan oc >>= \el->
 
 
 -- | Produce the specified number of interleaved \"streams\" from a chan.
--- Consuming a 'UI.Stream' is much faster than calling 'tryReadChan', and
+-- Nextuming a 'UI.Stream' is much faster than calling 'tryReadChan', and
 -- might be useful when an MPSC queue is needed, or when multiple consumers
 -- should be load-balanced in a round-robin fashion. 
 --
@@ -249,12 +247,12 @@ readChan io oc = tryReadChan oc >>= \el->
 -- >    forkIO $ printStream str3   -- prints: 3,6,9
 -- >  where 
 -- >    printStream str = do
--- >      h <- 'tryNext' str
+-- >      h <- 'tryReadNext' str
 -- >      case h of
--- >        'Cons' a str' -> print a >> printStream str'
+-- >        'Next' a str' -> print a >> printStream str'
 -- >        -- We know that all values were already written, so a Pending tells 
 -- >        -- us we can exit; in other cases we might call 'yield' and then 
--- >        -- retry that same @'tryNext' str@:
+-- >        -- retry that same @'tryReadNext' str@:
 -- >        'Pending' -> return ()
 streamChan :: UnagiPrim a=> Int -> OutChan a -> IO [UT.Stream a]
 {-# INLINE streamChan #-}
@@ -287,7 +285,7 @@ streamChan period (OutChan _ (ChanEnd counter streamHead)) = do
             mbEl <- tryReadChanInternals segIx sigArr eArr
             return $ case mbEl of
                  Nothing -> UT.Pending
-                 Just el -> UT.Cons el $ stream strOffset str (ix+period)
+                 Just el -> UT.Next el $ stream strOffset str (ix+period)
 
     return $ map (stream offsetInitial strInitial) $
      -- [ix0..(ix0+period-1)] -- WRONG (hint: overflow)!

@@ -64,7 +64,7 @@ unagiNoBlockingUnboxedMain = do
 -- Helper for when we know a read should succeed immediately:
 tryReadChanErr :: UnagiPrim a=> OutChan a -> IO a
 tryReadChanErr oc = tryReadChan oc 
-                    >>= peekElement 
+                    >>= tryRead 
                     >>= maybe (error "A read we expected to succeed failed!") return
 
 smoke :: Int -> IO ()
@@ -102,10 +102,10 @@ magicSmokeChan (Just magic) = do
     unless (Just magic == atomicUnicorn) $ error "Pass us atomicUnicorn plz"
     (i,o) <- newChan
     el <- tryReadChan o 
-    peekElement el
+    tryRead el
       >>= maybe (return ()) (const $ error "magicSmokeChan: should be empty!")
     writeChan i magic
-    magic' <- peekElement el
+    magic' <- tryRead el
                   >>= maybe (error "magicSmokeChan: empty!") return
     unless (magic == magic') $ 
         error "magicSmokeChan: we didn't read back atomicUnicorn!"
@@ -118,23 +118,23 @@ magicSmokeStream (Just magic) = do
     case strms of
          [strm1,strm2] -> do
             writeChan i magic
-            h <- tryNext strm1
+            h <- tryReadNext strm1
             case h of
               Pending -> error "magicSmokeStream: strm1 pending!"
-              (Cons x1 xs1) -> do
+              (Next x1 xs1) -> do
                 unless (x1 == magic) $ error "magicSmokeStream: x1 /= magic"
-                h2 <- tryNext strm2
+                h2 <- tryReadNext strm2
                 case h2 of
-                  (Cons _ _) -> error "magicSmokeStream: h2 /= Pending!"
+                  (Next _ _) -> error "magicSmokeStream: h2 /= Pending!"
                   _ -> do writeChan i magic
-                          h2' <- tryNext strm2
+                          h2' <- tryReadNext strm2
                           case h2' of
                             Pending -> error "h2' == Pending!"
-                            Cons x2 _ -> do 
+                            Next x2 _ -> do 
                               unless (x2 == magic) $ error "x2 /= magic"
-                              h' <- tryNext xs1
+                              h' <- tryReadNext xs1
                               case h' of
-                                (Cons _ _) -> error "magicSmokeStream: h' /= Pending!"
+                                (Next _ _) -> error "magicSmokeStream: h' /= Pending!"
                                 Pending -> return ()
          _ -> error "streamChan broken"
 
@@ -297,9 +297,9 @@ streamChanSmoke =
       unless ((sort $ concat parts) == [1..payload]) $
         error $ "Somehow read parts weren't what we expected: "++(show parts)
    where consumeUntilEmpty stack (strm,v) = do
-           h <- tryNext strm
+           h <- tryReadNext strm
            case h of
-             (Cons x xs) -> consumeUntilEmpty (x:stack) (xs,v)
+             (Next x xs) -> consumeUntilEmpty (x:stack) (xs,v)
              Pending -> putMVar v stack -- Done
 
 -- Simple writer/streamer concurrency test
@@ -312,10 +312,10 @@ streamChanConcurrentStreamerWriter n = do
           | failCnt > 4 = putMVar v $ Left "failCnt exceeded; possibly bug, but probably anomaly"
           | itr > n = putMVar v $ Right stack
           | otherwise = do
-              xs <- tryNext s
+              xs <- tryReadNext s
               case xs of
                 Pending -> threadDelay 1000 >> streamReader s stack itr (failCnt+1)
-                Cons x xs' -> streamReader xs' (x:stack) (itr+1) 0
+                Next x xs' -> streamReader xs' (x:stack) (itr+1) 0
     void $ forkIO $ streamReader strm [] (1::Int) (0::Int)
     void $ forkIO $ mapM_ (writeChan i) [1..n]
     strmOut <- either error return =<< takeMVar v
@@ -331,13 +331,13 @@ streamChanConcurrentStreamerReader n = do
     vStream <- newEmptyMVar
     vOutchan <- newEmptyMVar
     let streamReader s stack = do
-          xs <- tryNext s
+          xs <- tryReadNext s
           case xs of
             Pending -> putMVar vStream stack
-            Cons x xs' -> streamReader xs' (x:stack)
+            Next x xs' -> streamReader xs' (x:stack)
 
         outchanReader stack = do
-          tryReadChan o >>= peekElement >>= maybe (putMVar vOutchan stack) (outchanReader . (:stack))
+          tryReadChan o >>= tryRead >>= maybe (putMVar vOutchan stack) (outchanReader . (:stack))
     void $ forkIO $ streamReader strm []
     void $ forkIO $ outchanReader []
     strmOut <- takeMVar vStream `onException` putStr " :in takeMVar vStream: "

@@ -191,10 +191,10 @@ asyncReadsWritesUnagiNoBlockingStream writers readers n = do
   (i,o) <- UN.newChan
   strms <- UN.streamChan readers o
   let doReads x str = when (x > 0) $ do
-        cns <- UN.tryNext str
+        cns <- UN.tryReadNext str
         case cns of
              UN.Pending -> pause >> doReads x str
-             UN.Cons _ str' -> doReads (x-1) str'
+             UN.Next _ str' -> doReads (x-1) str'
   rcvrs <- mapM (async . doReads (nNice `quot` readers)) strms
   _ <- replicateM writers $ async $ replicateM_ (nNice `quot` writers) $ UN.writeChan i ()
   mapM_ wait rcvrs
@@ -207,10 +207,10 @@ asyncSumIntUnagiNoBlockingStream n = do
    [ str0 ] <- UN.streamChan 1 o
    let readerSum  0  !tot _   = return tot
        readerSum !n' !tot str = do 
-         cns <- UN.tryNext str
+         cns <- UN.tryReadNext str
          case cns of
               UN.Pending -> threadDelay 1 >> readerSum n' tot str
-              UN.Cons val str' -> readerSum (n'-1) (tot+val) str'
+              UN.Next val str' -> readerSum (n'-1) (tot+val) str'
    _ <- async $ mapM_ (UN.writeChan i) [1..n] -- NOTE: partially-applied writeChan
    readerSum n 0 str0
 
@@ -255,10 +255,10 @@ asyncReadsWritesUnagiNoBlockingUnboxedStream writers readers n = do
   (i,o) <- UNU.newChan
   strms <- UNU.streamChan readers o
   let doReads x str = when (x > 0) $ do
-        cns <- UNU.tryNext str
+        cns <- UNU.tryReadNext str
         case cns of
              UNU.Pending -> pause >> doReads x str
-             UNU.Cons _ str' -> doReads (x-1) str'
+             UNU.Next _ str' -> doReads (x-1) str'
   rcvrs <- mapM (async . doReads (nNice `quot` readers)) strms
   _ <- replicateM writers $ async $ replicateM_ (nNice `quot` writers) $ UNU.writeChan i ()
   mapM_ wait rcvrs
@@ -271,10 +271,10 @@ asyncSumIntUnagiNoBlockingUnboxedStream n = do
    [ str0 ] <- UNU.streamChan 1 o
    let readerSum  0  !tot _   = return tot
        readerSum !n' !tot str = do 
-         cns <- UNU.tryNext str
+         cns <- UNU.tryReadNext str
          case cns of
               UNU.Pending -> threadDelay 1 >> readerSum n' tot str
-              UNU.Cons val str' -> readerSum (n'-1) (tot+val) str'
+              UNU.Next val str' -> readerSum (n'-1) (tot+val) str'
    _ <- async $ mapM_ (UNU.writeChan i) [1..n] -- NOTE: partially-applied writeChan
    readerSum n 0 str0
 

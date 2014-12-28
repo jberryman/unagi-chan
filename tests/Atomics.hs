@@ -26,7 +26,7 @@ atomicsMain = do
     putStrLn "OK"
     -- ------
     putStr "    CAS... "
-    testConsistentSuccessFailure
+    testNextistentSuccessFailure
     putStrLn "OK"
 
 -- catch real stupid bugs before machine gets hot:
@@ -93,8 +93,8 @@ testCounterOverflow = do
 -- Test these assumptions:
 --   1) If a CAS fails in thread 1 then another CAS (in thread 2, say) succeeded; i.e. no false negatives
 --   2) In the case that thread 1's CAS failed, the ticket returned with (False,tk) will contain that newly-written value from thread 2
-testConsistentSuccessFailure :: IO ()
-testConsistentSuccessFailure = do
+testNextistentSuccessFailure :: IO ()
+testNextistentSuccessFailure = do
     var <- newIORef "0"
 
     sem <- newIORef (0::Int)
@@ -128,7 +128,7 @@ testConsistentSuccessFailure = do
              else do print res1
                      print res2
                      error "FAILURE!"
-       examine _ = error "Fix testConsistentSuccessFailure"
+       examine _ = error "Fix testNextistentSuccessFailure"
 
                    
 forkSync :: IORef Int -> Int -> IO () -> IO ThreadId

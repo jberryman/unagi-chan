@@ -21,7 +21,7 @@ module Control.Concurrent.Chan.Unagi.NoBlocking.Unboxed (
     -- ** Broadcasting
     , dupChan
     -- ** Streaming
-    , Stream(..), Cons(..)
+    , Stream(..), Next(..)
     , streamChan
     ) where
 

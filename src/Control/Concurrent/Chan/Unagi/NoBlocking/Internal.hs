@@ -6,7 +6,7 @@ module Control.Concurrent.Chan.Unagi.NoBlocking.Internal
     (sEGMENT_LENGTH
     , InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell, Stream(..)
     , NextSegment(..), StreamHead(..)
-    , newChanStarting, writeChan, tryReadChan, readChan, Element(..)
+    , newChanStarting, writeChan, tryReadChan, readChan, UT.Element(..)
     , dupChan
     , streamChan
     , isActive
@@ -115,14 +115,14 @@ newChanStarting !startingCellOffset = do
 -- | An action that returns @False@ sometime after the chan no longer has any
 -- writers.
 --
--- After @False@ is returned, any 'peekElement' which returns @Nothing@ can be
--- considered to be dead. Likewise for 'UT.tryNext'. Note that in the blocking
--- implementations a @BlockedIndefinitelyOnMVar@ exception is raised, so this
--- function is unnecessary.
+-- After @False@ is returned, any 'UT.tryRead' which returns @Nothing@ can
+-- be considered to be dead. Likewise for 'UT.tryReadNext'. Note that in the
+-- blocking implementations a @BlockedIndefinitelyOnMVar@ exception is raised,
+-- so this function is unnecessary.
 isActive :: OutChan a -> IO Bool
 isActive (OutChan finalizee _) = do
     b <- readIORef finalizee
-    -- make sure that any peekElement that follows is not moved ahead. See
+    -- make sure that any tryRead that follows is not moved ahead. See
     -- newChanStarting [*]:
     loadLoadBarrier
     return b
@@ -160,28 +160,24 @@ writeChan (InChan _ ce@(ChanEnd segSource _ _)) = \a-> mask_ $ do
  -- the last element. See 'newChanStarting' and 'isActive'.
 
 
--- TODO - or 'Item'? And something shorter than 'peeklement'?
---      - Make symmetry with 'tryNext' here
-
--- | An idempotent @IO@ action that returns a particular enqueued element when
--- and if it becomes available. Each @Element@ corresponds to a particular
--- enqueued element, i.e. a returned @Element@ always offers the only means to
--- access one particular enqueued item.
-newtype Element a = Element { peekElement :: IO (Maybe a) }
 
 
--- | Read an element from the chan, returning an @'Element' a@ future which
--- returns an actual element, when available, via 'peekElement'.
+   -- NOTE: this might be better named "claimElement" or something, but we'll
+   -- keep the name since it's the closest equivalent to a real "tryReadChan"
+   -- we can get in this design:
+
+-- | Returns immediately with an @'UT.Element' a@ future, which returns one
+-- unique element when it becomes available via 'UT.tryRead'.
 --
 -- /Note re. exceptions/: When an async exception is raised during a @tryReadChan@ 
 -- the message that the read would have returned is likely to be lost, just as
 -- it would be when raised directly after this function returns.
-tryReadChan :: OutChan a -> IO (Element a)
+tryReadChan :: OutChan a -> IO (UT.Element a)
 {-# INLINE tryReadChan #-}
 tryReadChan (OutChan _ ce) = do  -- NOTE [1]
     (segIx, (Stream seg _), maybeUpdateStreamHead) <- moveToNextCell ce
     maybeUpdateStreamHead
-    return $ Element $ P.readArray seg segIx
+    return $ UT.Element $ P.readArray seg segIx
  -- [1] We don't need to mask exceptions here. We say that exceptions raised in
  -- tryReadChan are linearizable as occuring just before we are to return with our
  -- element. Note that the two effects in moveToNextCell are to increment the
@@ -190,7 +186,7 @@ tryReadChan (OutChan _ ce) = do  -- NOTE [1]
 
 
 -- | @readChan io c@ returns the next element from @c@, calling 'tryReadChan'
--- and looping on the 'Element' returned, and calling @io@ at each iteration
+-- and looping on the 'UT.Element' returned, and calling @io@ at each iteration
 -- when the element is not yet available. It throws 'BlockedIndefinitelyOnMVar'
 -- when 'isActive' determines that a value will never be returned.
 --
@@ -200,7 +196,7 @@ tryReadChan (OutChan _ ce) = do  -- NOTE [1]
 readChan :: IO () -> OutChan a -> IO a
 {-# INLINE readChan #-}
 readChan io oc = tryReadChan oc >>= \el->
-    let peekMaybe f = peekElement el >>= maybe f return 
+    let peekMaybe f = UT.tryRead el >>= maybe f return 
         go = peekMaybe checkAndGo
         checkAndGo = do 
             b <- isActive oc
@@ -213,14 +209,14 @@ readChan io oc = tryReadChan oc >>= \el->
 -- TODO a write-side equivalent:
 --   - can be made streaming agnostic?
 --   - NOTE: if we're only streaming in and out, then using multiple chans is
---   possible (e.g. 3W6R is equivalent to 3 1:2 streaming chans)
+--   possible (e.g. 3:6  is equivalent to 3 sets of 1:2 streaming chans)
 --
 -- TODO possible extension to streamChan
 --   - overload streamChan for Streams too.
 
 
 -- | Produce the specified number of interleaved \"streams\" from a chan.
--- Consuming a 'UI.Stream' is much faster than calling 'tryReadChan', and
+-- Nextuming a 'UI.Stream' is much faster than calling 'tryReadChan', and
 -- might be useful when an MPSC queue is needed, or when multiple consumers
 -- should be load-balanced in a round-robin fashion. 
 --
@@ -233,12 +229,12 @@ readChan io oc = tryReadChan oc >>= \el->
 -- >    forkIO $ printStream str3   -- prints: 3,6,9
 -- >  where 
 -- >    printStream str = do
--- >      h <- 'tryNext' str
+-- >      h <- 'tryReadNext' str
 -- >      case h of
--- >        'Cons' a str' -> print a >> printStream str'
+-- >        'Next' a str' -> print a >> printStream str'
 -- >        -- We know that all values were already written, so a Pending tells 
 -- >        -- us we can exit; in other cases we might call 'yield' and then 
--- >        -- retry that same @'tryNext' str@:
+-- >        -- retry that same @'tryReadNext' str@:
 -- >        'Pending' -> return ()
 streamChan :: Int -> OutChan a -> IO [UT.Stream a]
 {-# INLINE streamChan #-}
@@ -274,7 +270,7 @@ streamChan period (OutChan _ (ChanEnd segSource counter streamHead)) = do
                  -- Navigate to next cell and return this cell's value
                  -- along with the wrapped action to read from the next
                  -- cell and possibly recurse.
-                 Just a -> return $ UT.Cons a $ stream strOffset str (ix+period)
+                 Just a -> return $ UT.Next a $ stream strOffset str (ix+period)
 
     return $ map (stream offsetInitial strInitial) $
      -- [ix0..(ix0+period-1)] -- WRONG (hint: overflow)!

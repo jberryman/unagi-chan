@@ -98,12 +98,12 @@ main = do
 tryReadChanErrUN :: UN.OutChan a -> IO a
 {-# INLINE tryReadChanErrUN #-}
 tryReadChanErrUN oc = UN.tryReadChan oc 
-                    >>= UN.peekElement 
+                    >>= UN.tryRead 
                     >>= maybe (error "A read we expected to succeed failed!") return
 tryReadChanErrUNU :: UNU.UnagiPrim a=> UNU.OutChan a -> IO a
 {-# INLINE tryReadChanErrUNU #-}
 tryReadChanErrUNU oc = UNU.tryReadChan oc 
-                    >>= UNU.peekElement 
+                    >>= UNU.tryRead 
                     >>= maybe (error "A read we expected to succeed failed!") return
 
 
@@ -144,10 +144,10 @@ runtestSplitChanUNStream1 n = do
   replicateM_ n $ UN.writeChan i ()
   -- consume until we hit empty:
   let eat str = do
-          x <- UN.tryNext str
+          x <- UN.tryReadNext str
           case x of
                UN.Pending -> return ()
-               UN.Cons _ str' -> eat str'
+               UN.Next _ str' -> eat str'
   eat oStream
 
 runtestSplitChanUNStream2 n = do
@@ -155,10 +155,10 @@ runtestSplitChanUNStream2 n = do
   [ oStream ] <- UN.streamChan 1 o
   let n1000 = n `quot` 1000
   let eat str = do
-          x <- UN.tryNext str
+          x <- UN.tryReadNext str
           case x of
                UN.Pending -> return str
-               UN.Cons _ str' -> eat str'
+               UN.Next _ str' -> eat str'
       writeAndEat iter str = unless (iter <=0) $ do
           replicateM_ n1000 $ UN.writeChan i ()
           eat str >>= writeAndEat (iter-1)
@@ -188,10 +188,10 @@ runtestSplitChanUNUStream1 n = do
   replicateM_ n $ UNU.writeChan i (0::Int)
   -- consume until we hit empty:
   let eat str = do
-          x <- UNU.tryNext str
+          x <- UNU.tryReadNext str
           case x of
                UNU.Pending -> return ()
-               UNU.Cons _ str' -> eat str'
+               UNU.Next _ str' -> eat str'
   eat oStream
 
 runtestSplitChanUNUStream2 n = do
@@ -199,10 +199,10 @@ runtestSplitChanUNUStream2 n = do
   [ oStream ] <- UNU.streamChan 1 o
   let n1000 = n `quot` 1000
   let eat str = do
-          x <- UNU.tryNext str
+          x <- UNU.tryReadNext str
           case x of
                UNU.Pending -> return str
-               UNU.Cons _ str' -> eat str'
+               UNU.Next _ str' -> eat str'
       writeAndEat iter str = unless (iter <=0) $ do
           replicateM_ n1000 $ UNU.writeChan i (0::Int)
           eat str >>= writeAndEat (iter-1)

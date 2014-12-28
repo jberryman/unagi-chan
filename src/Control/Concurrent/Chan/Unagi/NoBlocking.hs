@@ -20,7 +20,7 @@ module Control.Concurrent.Chan.Unagi.NoBlocking (
     -- ** Broadcasting
     , dupChan
     -- ** Streaming
-    , Stream(..), Cons(..)
+    , Stream(..), Next(..)
     , streamChan
     ) where
 
