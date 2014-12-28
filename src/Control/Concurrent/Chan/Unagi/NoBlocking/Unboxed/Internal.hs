@@ -146,11 +146,6 @@ nonMagicCellWritten = 1
 
 
 
---  TODO
---    - UNRELATED: in Counter.Fat, make constant a constant with the let/in/assert trick
---         - Double check that actually works by looking at core!
-
-
 -- | Write a value to the channel.
 writeChan :: UnagiPrim a=> InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
