@@ -290,7 +290,6 @@ streamChan period (OutChan _ (ChanEnd counter streamHead)) = do
             str@(Stream sigArr eArr _ _) <- go segsAway str0
             let !strOffset = offset0+(segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH)  
             --                       (segsAway  *                 sEGMENT_LENGTH)
-            -- Adapted from tryReadChan TODO benchmark and try to factor out:
             mbEl <- tryReadChanInternals segIx sigArr eArr
             return $ case mbEl of
                  Nothing -> UT.Pending

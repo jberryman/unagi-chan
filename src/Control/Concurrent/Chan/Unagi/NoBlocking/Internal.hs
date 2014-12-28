@@ -160,7 +160,8 @@ writeChan (InChan _ ce@(ChanEnd segSource _ _)) = \a-> mask_ $ do
  -- the last element. See 'newChanStarting' and 'isActive'.
 
 
--- TODO or 'Item'? And something shorter than 'peeklement'?
+-- TODO - or 'Item'? And something shorter than 'peeklement'?
+--      - Make symmetry with 'tryNext' here
 
 -- | An idempotent @IO@ action that returns a particular enqueued element when
 -- and if it becomes available. Each @Element@ corresponds to a particular
@@ -209,18 +210,6 @@ readChan io oc = tryReadChan oc >>= \el->
      in go
 
 
---
---
---     TODO: Three streaming variants?:
---       - a streamChan that blocks (need isActive to use an MVar) until writers exit, 
---          which returns agostic ListT equivalent
---           - NO: we could provide a blocking isActive, but otherwise this is equivalent to below
---       - an agnostic streaming version that only returns mzero when isActive returns False, else calling yield
---       (both of above could use same concrete type instance, with accessor 'readStream')
---       - existing version (with concrete type)
---   
---   - then add benchmarks with pipes/IOStreams
---
 -- TODO a write-side equivalent:
 --   - can be made streaming agnostic?
 --   - NOTE: if we're only streaming in and out, then using multiple chans is
@@ -228,9 +217,7 @@ readChan io oc = tryReadChan oc >>= \el->
 --
 -- TODO possible extension to streamChan
 --   - overload streamChan for Streams too.
---
 
--- TODO THIS SHOULD PROBABLY BE RENAMED TO streamChanTrying THEN HAVE streamChan BE PASSED AN IO ()
 
 -- | Produce the specified number of interleaved \"streams\" from a chan.
 -- Consuming a 'UI.Stream' is much faster than calling 'tryReadChan', and
