@@ -26,7 +26,6 @@ module Control.Concurrent.Chan.Unagi.NoBlocking.Internal
 
 import Data.IORef
 import Control.Exception
-import Control.Monad.Primitive(RealWorld)
 import Data.Atomics.Counter.Fat
 import Data.Atomics
 import qualified Data.Primitive as P
@@ -35,43 +34,23 @@ import Control.Applicative
 import Data.Bits
 import Data.Typeable(Typeable)
 
-import Utilities(touchIORef)
+import Control.Concurrent.Chan.Unagi.Internal(
+    newSegmentSource, moveToNextCell, waitingAdvanceStream,
+    ChanEnd(..), StreamHead(..), StreamSegment, Stream(..), NextSegment(..))
 import Control.Concurrent.Chan.Unagi.Constants
 import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Types as UT
 
 
 -- | The write end of a channel created with 'newChan'.
 data InChan a = InChan !(IORef Bool) -- Used for creating an OutChan in dupChan
-                       !(ChanEnd a)
+                       !(ChanEnd (Cell a))
     deriving (Typeable,Eq)
 
 -- | The read end of a channel created with 'newChan'.
 data OutChan a = OutChan !(IORef Bool) -- Is corresponding InChan still alive?
-                         !(ChanEnd a) 
+                         !(ChanEnd (Cell a)) 
     deriving (Typeable,Eq)
 
-instance Eq (ChanEnd a) where
-     (ChanEnd _ _ headA) == (ChanEnd _ _ headB)
-        = headA == headB
-
-
--- InChan & OutChan are mostly identical, sharing a stream, but with
--- independent counters
-data ChanEnd a = 
-           -- an efficient producer of segments of length sEGMENT_LENGTH:
-    ChanEnd !(SegSource a)
-            -- Both Chan ends must start with the same counter value.
-            !AtomicCounter 
-            -- the stream head; this must never point to a segment whose offset
-            -- is greater than the counter value
-            !(IORef (StreamHead a))
-    deriving Typeable
-
-data StreamHead a = StreamHead !Int !(Stream a)
-
---TODO later see if we get a benefit from the small array primops in 7.10,
---     which omit card-marking overhead and might have faster clone.
-type StreamSegment a = P.MutableArray RealWorld (Cell a)
 
 -- TRANSITIONS and POSSIBLE VALUES:
 --   During Read:
@@ -81,20 +60,12 @@ type StreamSegment a = P.MutableArray RealWorld (Cell a)
 --     Nothing   -> Just a
 type Cell a = Maybe a
 
-data Stream a = 
-    Stream !(StreamSegment a)
-           -- The next segment in the stream; new segments are allocated and
-           -- put here as we go, with threads cooperating to allocate new
-           -- segments:
-           !(IORef (NextSegment a))
-
-data NextSegment a = NoSegment | Next !(Stream a)
 
 -- we expose `startingCellOffset` for debugging correct behavior with overflow:
 newChanStarting :: Int -> IO (InChan a, OutChan a)
 {-# INLINE newChanStarting #-}
 newChanStarting !startingCellOffset = do
-    segSource <- newSegmentSource
+    segSource <- newSegmentSource Nothing
     stream <- Stream <$> segSource 
                      <*> newIORef NoSegment
     let end = ChanEnd segSource 
@@ -211,8 +182,7 @@ readChan io oc = tryReadChan oc >>= \el->
 --   - NOTE: if we're only streaming in and out, then using multiple chans is
 --   possible (e.g. 3:6  is equivalent to 3 sets of 1:2 streaming chans)
 --
--- TODO possible extension to streamChan
---   - overload streamChan for Streams too.
+-- TODO MAYBE: overload `streamChan` for Streams too.
 
 
 -- | Produce the specified number of interleaved \"streams\" from a chan.
@@ -275,72 +245,3 @@ streamChan period (OutChan _ (ChanEnd segSource counter streamHead)) = do
     return $ map (stream offsetInitial strInitial) $
      -- [ix0..(ix0+period-1)] -- WRONG (hint: overflow)!
         take period $ iterate (+1) ix0
-
-
--- TODO use moveToNextCell/waitingAdvanceStream from Unagi.hs, only we'd need
---      to parameterize those functions and types by 'Cell a' rather than 'a'.
---      And use the version of moveToNextCell here, which returns the update
---      continuation.
---       - and N.B. touchIORef in moveToNextCell!
-
--- increments counter, finds stream segment of corresponding cell (updating the
--- stream head pointer as needed), and returns the stream segment and relative
--- index of our cell.
-moveToNextCell :: ChanEnd a -> IO (Int, Stream a, IO ())
-{-# INLINE moveToNextCell #-}
-moveToNextCell (ChanEnd segSource counter streamHead) = do
-    (StreamHead offset0 str0) <- readIORef streamHead
-    ix <- incrCounter 1 counter
-    let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
-                 divMod_sEGMENT_LENGTH $! (ix - offset0)
-              -- (ix - offset0) `quotRem` sEGMENT_LENGTH
-        {-# INLINE go #-}
-        go 0 str = return str
-        go !n (Stream _ next) =
-            waitingAdvanceStream next segSource (nEW_SEGMENT_WAIT*segIx)
-              >>= go (n-1)
-    str <- go segsAway str0
-    let !maybeUpdateStreamHead = do
-          when (segsAway > 0) $ do
-            let !offsetN = 
-                  offset0 + (segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH) --(segsAway*sEGMENT_LENGTH)
-            writeIORef streamHead $ StreamHead offsetN str
-          touchIORef streamHead -- NOTE [1]
-    return (segIx,str, maybeUpdateStreamHead)
-  -- [1] This helps ensure that our (possibly last) use of streamHead occurs
-  -- after our (possibly last) write, for correctness of 'isActive'.  See NOTE
-  -- 1 of 'writeChan'
-
-
--- thread-safely try to fill `nextSegRef` at the next offset with a new
--- segment, waiting some number of iterations (for other threads to handle it).
--- Returns nextSegRef's StreamSegment.
-waitingAdvanceStream :: IORef (NextSegment a) -> SegSource a 
-                     -> Int -> IO (Stream a)
-waitingAdvanceStream nextSegRef segSource = go where
-  go !wait = assert (wait >= 0) $ do
-    tk <- readForCAS nextSegRef
-    case peekTicket tk of
-         NoSegment 
-           | wait > 0 -> go (wait - 1)
-             -- Create a potential next segment and try to insert it:
-           | otherwise -> do 
-               potentialStrNext <- Stream <$> segSource 
-                                          <*> newIORef NoSegment
-               (_,tkDone) <- casIORef nextSegRef tk (Next potentialStrNext)
-               -- If that failed another thread succeeded (no false negatives)
-               case peekTicket tkDone of
-                 Next strNext -> return strNext
-                 _ -> error "Impossible! This should only have been Next segment"
-         Next strNext -> return strNext
-
-
--- copying a template array with cloneMutableArray is much faster than creating
--- a new one; in fact it seems we need this in order to scale, since as cores
--- increase we don't have enough "runway" and can't allocate fast enough:
-type SegSource a = IO (StreamSegment a)
-
-newSegmentSource :: IO (SegSource a)
-newSegmentSource = do
-    arr <- P.newArray sEGMENT_LENGTH Nothing
-    return (P.cloneMutableArray arr 0 sEGMENT_LENGTH)
