@@ -7,6 +7,9 @@ import Control.Concurrent
 import qualified Control.Concurrent.Chan.Unagi as U
 import qualified Control.Concurrent.Chan.Unagi.Unboxed as UU
 import qualified Control.Concurrent.Chan.Unagi.Bounded as UB
+import qualified Control.Concurrent.Chan.Unagi.NoBlocking as UN
+import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Unboxed as UNU
+
 import qualified Control.Concurrent.Chan as C
 import qualified Control.Concurrent.STM.TQueue as S
 import Control.Concurrent.STM
@@ -30,10 +33,12 @@ main = do
 
 main = do
     [n] <- getArgs
-    -- runU (read n)
+    runU (read n)
     -- runUU (read n)
-    runUB (read n)
-{-
+    -- runUB (read n)
+    -- runUN (read n)
+    -- runUNStream (read n)
+    -- runUNUStream (read n)
 runU :: Int -> IO ()
 runU n = do
   (i,o) <- U.newChan
@@ -41,7 +46,6 @@ runU n = do
   replicateM_ 1000 $ do
     replicateM_ n1000 $ U.writeChan i ()
     replicateM_ n1000 $ U.readChan o
- -}
 {-
 runUU :: Int -> IO ()
 runUU n = do
@@ -50,7 +54,6 @@ runUU n = do
   replicateM_ 1000 $ do
     replicateM_ n1000 $ UU.writeChan i (0::Int)
     replicateM_ n1000 $ UU.readChan o
- -}
 
 runUB :: Int -> IO ()
 runUB n = do
@@ -59,6 +62,63 @@ runUB n = do
   replicateM_ 1000 $ do
     replicateM_ n1000 $ UB.writeChan i (0::Int)
     replicateM_ n1000 $ UB.readChan o
+
+
+tryReadChanErrUN :: UN.OutChan a -> IO a
+{-# INLINE tryReadChanErrUN #-}
+tryReadChanErrUN oc = UN.tryReadChan oc 
+                    >>= UN.tryRead 
+                    >>= maybe (error "A read we expected to succeed failed!") return
+
+runUN n = do
+  (i,o) <- UN.newChan
+  let n1000 = n `quot` 1000
+  replicateM_ 1000 $ do
+    replicateM_ n1000 $ UN.writeChan i ()
+    replicateM_ n1000 $ tryReadChanErrUN o
+
+runUNStream n = do
+  (i,o) <- UN.newChan
+  [ oStream ] <- UN.streamChan 1 o
+  let n1000 = n `quot` 1000
+  let eat str = do
+          x <- UN.tryReadNext str
+          case x of
+               UN.Pending -> return str
+               UN.Next _ str' -> eat str'
+      writeAndEat iter str = unless (iter <=0) $ do
+          replicateM_ n1000 $ UN.writeChan i ()
+          eat str >>= writeAndEat (iter-1)
+        
+  writeAndEat (1000::Int) oStream
+ -}
+tryReadChanErrUNU :: UNU.UnagiPrim a=> UNU.OutChan a -> IO a
+{-# INLINE tryReadChanErrUNU #-}
+tryReadChanErrUNU oc = UNU.tryReadChan oc 
+                    >>= UNU.tryRead 
+                    >>= maybe (error "A read we expected to succeed failed!") return
+
+runUNU n = do
+  (i,o) <- UNU.newChan
+  let n1000 = n `quot` 1000
+  replicateM_ 1000 $ do
+    replicateM_ n1000 $ UNU.writeChan i (0::Int)
+    replicateM_ n1000 $ tryReadChanErrUNU o
+
+runUNUStream n = do
+  (i,o) <- UNU.newChan
+  [ oStream ] <- UNU.streamChan 1 o
+  let n1000 = n `quot` 1000
+  let eat str = do
+          x <- UNU.tryReadNext str
+          case x of
+               UNU.Pending -> return str
+               UNU.Next _ str' -> eat str'
+      writeAndEat iter str = unless (iter <=0) $ do
+          replicateM_ n1000 $ UNU.writeChan i (0::Int)
+          eat str >>= writeAndEat (iter-1)
+        
+  writeAndEat (1000::Int) oStream
 
 {-
 runU :: Int -> Int -> Int -> IO ()

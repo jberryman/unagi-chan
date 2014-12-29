@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes , ScopedTypeVariables , BangPatterns #-}
 module UnagiUnboxed (unagiUnboxedMain) where
 
 -- Unagi-chan-specific tests
@@ -10,6 +11,11 @@ import Control.Monad
 import qualified Data.Primitive as P
 import Data.IORef
 
+import Data.Int(Int8,Int16,Int32,Int64)
+import Data.Word(Word,Word8,Word16,Word32,Word64)
+import Data.Maybe
+import Data.Typeable
+
 import Control.Concurrent(forkIO,threadDelay)
 import Control.Concurrent.MVar
 import Control.Exception
@@ -20,10 +26,17 @@ unagiUnboxedMain = do
     putStrLn "==================="
     putStrLn "Testing Unagi.Unboxed details:"
     -- ------
-    -- ------
     putStr "Smoke test at different starting offsets, spanning overflow... "
     mapM_ smoke $ [ (maxBound - UI.sEGMENT_LENGTH - 1) .. maxBound] 
                   ++ [minBound .. (minBound + UI.sEGMENT_LENGTH + 1)]
+    putStrLn "OK"
+    -- ------
+    putStr "segSource sanity... "
+    applyToAllPrim segSourceMagicSanity
+    putStrLn "OK"
+    -- ------
+    putStr "Atomicity of atomic unicorns... "
+    applyToAllPrim atomicUnicornAtomicicity
     putStrLn "OK"
     -- ------
     putStr "Correct first write... "
@@ -40,7 +53,40 @@ unagiUnboxedMain = do
 
 
 smoke :: Int -> IO ()
-smoke n = smoke1 n >> smoke2 n
+smoke n = do
+    smoke1 n 
+    smoke2 n
+    -- test each of UnagiPrim
+    applyToAllPrim smokeManyElement
+    -- test for atomicUnicorns
+    applyToAllPrim smokeManyUnicorn
+
+-- test a function against each Prim type elements not equal to atomicUnicorn
+applyToAllPrim :: (forall e. (Num e, Typeable e, Show e, UnagiPrim e)=> e -> IO ()) -> IO ()
+applyToAllPrim f = do
+    f ('c' :: Char)
+    f (3.14159 :: Float)
+    f (-1.000000000000001  :: Double)
+    f (maxBound :: Int)
+    f (minBound :: Int8)
+    f (maxBound :: Int16)
+    f (minBound :: Int32)
+    f (maxBound :: Int64)
+    f (maxBound :: Word)
+    f (maxBound :: Word8)
+    f (minBound :: Word16)
+    f (minBound :: Word32)
+    f (minBound :: Word64)
+    f (P.nullAddr `P.plusAddr` 1024 :: P.Addr)
+
+-- TODO Maybe refactor & get rid of these
+instance Show P.Addr where
+    show _ = "<addr>"
+
+instance Num P.Addr where
+
+instance Num Char where
+
 
 -- www.../rrr... spanning overflow
 smoke1 :: Int -> IO ()
@@ -49,9 +95,8 @@ smoke1 n = do
     let inp = [0 .. (UI.sEGMENT_LENGTH * 3)]
     mapM_ (writeChan i) inp
     outp <- getChanContents o
-    if and (zipWith (==) inp outp)
-        then return ()
-        else error $ "Smoke test failed with starting offset of: "++(show n)
+    unless (and (zipWith (==) inp outp)) $
+        error $ "Smoke test failed with starting offset of: "++(show n)
 
 -- w/r/w/r... spanning overflow
 smoke2 :: Int -> IO ()
@@ -62,9 +107,73 @@ smoke2 n = do
  where check i o x = do
          writeChan i x
          x' <- readChan o
-         if x == x'
-            then return ()
-            else error $ "Smoke test failed with starting offset of: "++(show n)++"at write: "++(show x)
+         unless (x == x') $
+            error $ "Smoke test failed with starting offset of: "++(show n)++"at write: "++(show x)
+
+-- for smoke checking size, and alignment of different Prim types, and allowing
+-- testing of writing atomicUnicorn
+smokeManyElement :: (Num e, Typeable e, Show e, UnagiPrim e)=> e -> IO ()
+smokeManyElement e = do
+    (i,o) <- newChan
+    let n = UI.sEGMENT_LENGTH*2 + 1
+    replicateM_ n (writeChan i e)
+    outp <- getChanContents o
+    unless (all (== e) $ take n outp) $
+        error $ "smokeManyElement failed with type "++(show $ typeOf e)++": "++(show e)++"  /=  "++(show outp)
+
+-- smokeManyElement for atomicUnicorn values
+smokeManyUnicorn :: forall e. (Num e, Typeable e, Show e, UnagiPrim e)=> e -> IO ()
+smokeManyUnicorn _ =
+    maybe (return ()) smokeManyElement (atomicUnicorn :: Maybe e)
+
+-- check our segSource is doing what we expect with magic values:
+segSourceMagicSanity :: forall e. (Num e, Typeable e, Show e, UnagiPrim e)=> e -> IO ()
+segSourceMagicSanity _ =
+    case atomicUnicorn :: Maybe e of
+      Nothing -> return ()
+      Just e -> do
+        (_,eArr) <- UI.segSource :: IO (UI.SignalIntArray, UI.ElementArray e)
+        forM_ [0.. UI.sEGMENT_LENGTH-1] $ \i-> do
+           e' <- UI.readElementArray eArr i
+           unless (e == e') $
+              error $ "in segSource, with type "++(show $ typeOf e)++", "++(show e)++" /= "++(show e')
+
+-- -------------
+
+-- Make sure we get no tearing of adjacent word-size or smaller (as determined
+-- by atomicUnicorn instantiation) values, making sure we cross a cache-line.
+atomicUnicornAtomicicity :: forall e. (Num e, Typeable e, Show e, UnagiPrim e)=> e -> IO ()
+atomicUnicornAtomicicity _e = 
+  when (isJust  (atomicUnicorn :: Maybe e)) $ do
+    (_,eArr) <- UI.segSource :: IO (UI.SignalIntArray, UI.ElementArray e)
+    let iters = (64 `quot` P.sizeOf _e) + 1
+    when (iters >= UI.sEGMENT_LENGTH) $ 
+      error "Our sEGMENT_LENGTH is smaller than expected; please fix test"
+    -- just skip Addr for now TODO:
+    unless (  isJust (cast _e :: Maybe P.Addr)
+           || isJust (cast _e :: Maybe Char)) $
+      forM_ [0.. iters] $ \i0 -> do
+        let i1 = i0+1
+            rd = UI.readElementArray eArr
+        first0 <- rd i0
+        first1 <- rd i1
+        v0 <- newEmptyMVar
+        v1 <- newEmptyMVar
+        let incr f v i = go
+             where go _ 0 = putMVar v ()
+                   go expected n = do
+                     val <- rd i
+                     unless (val == expected) $
+                       error $ "atomicUnicornAtomicicity with type "++(show $ typeOf val)++" "++(show val)++" /= "++(show expected)
+                     let !next = f val
+                     UI.writeElementArray eArr i next
+                     go next (n-1)
+        let counts = 1000000 :: Int
+        _ <- forkIO $ incr (+1) v0 i0 first0 counts
+        _ <- forkIO $ incr (subtract 1) v1 i1 first1 counts
+        -- BlockedIndefinitelyOnMVar means a problem TODO make better
+        takeMVar v0 >> takeMVar v1
+
 
 correctFirstWrite :: Int -> IO ()
 correctFirstWrite n = do

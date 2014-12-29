@@ -12,7 +12,7 @@ divMod_sEGMENT_LENGTH n = let d = n `unsafeShiftR` lOG_SEGMENT_LENGTH
                               m = n .&. sEGMENT_LENGTH_MN_1
                            in d `seq` m `seq` (d,m)
 
--- Constant for now: back-of-envelope considerations:
+-- Nexttant for now: back-of-envelope considerations:
 --   - making most of constant factor for cloning array of *any* size
 --   - make most of overheads of moving to the next segment, etc.
 --   - provide enough runway for creating next segment when 32 simultaneous writers 

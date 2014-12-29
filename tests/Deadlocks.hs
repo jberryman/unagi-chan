@@ -23,6 +23,28 @@ deadlocksMain = do
     putStr $ "    Checking for deadlocks from killed writer, x"++show tries++"... "
     checkDeadlocksWriter unagiImpl tries
     putStrLn "OK"
+
+    putStrLn "==================="
+    putStrLn "Testing Unagi.NoBlocking:"
+    -- ------
+    putStr $ "    Checking for deadlocks from killed reader, x"++show tries++"... "
+    checkDeadlocksReader unagiNoBlockingImpl tries
+    putStrLn "OK"
+    -- ------
+    putStr $ "    Checking for deadlocks from killed writer, x"++show tries++"... "
+    checkDeadlocksWriter unagiNoBlockingImpl tries
+    putStrLn "OK"
+    
+    putStrLn "==================="
+    putStrLn "Testing Unagi.NoBlocking.Unboxed:"
+    -- ------
+    putStr $ "    Checking for deadlocks from killed reader, x"++show tries++"... "
+    checkDeadlocksReader unagiNoBlockingUnboxedImpl tries
+    putStrLn "OK"
+    -- ------
+    putStr $ "    Checking for deadlocks from killed writer, x"++show tries++"... "
+    checkDeadlocksWriter unagiNoBlockingUnboxedImpl tries
+    putStrLn "OK"
     
     putStrLn "==================="
     putStrLn "Testing Unagi.Unboxed:"

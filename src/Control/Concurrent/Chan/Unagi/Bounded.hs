@@ -4,7 +4,7 @@ module Control.Concurrent.Chan.Unagi.Bounded (
     {-# WARNING "This library is unlikely to perform well on architectures without a fetch-and-add instruction" #-}
 #endif
 #if __GLASGOW_HASKELL__ < 708
-    {-# WARNING "Waking up blocked writers may be slower than desired in GHC<7.8 which makes readMVar non-blocking on full MVars. Considering upgrading." #-}
+    {-# WARNING "Waking up blocked writers may be slower than desired in GHC<7.8 which makes readMVar non-blocking on full MVars. Nextidering upgrading." #-}
 #endif
 {- | A queue with bounded size, which supports a 'writeChan' which blocks when
      the number of messages grows larger than desired. The bounds are

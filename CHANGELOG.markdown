@@ -12,3 +12,10 @@
 
 - conditionally use tryReadMVar (as before) when GHC >= 7.8.3
 - set proper CPP flags when running tests
+
+### 0.3.0.0
+
+- `Unagi.Unboxed` is now polymorphic in a new `UnagiPrim` class, which permits an optimization; defined instances are the same
+- add new NoBlocking variants with reads that don't block, omiting some overhead
+    - these have a new Stream interface for reads with even lower overhead
+- revisit memory barriers in light of https://github.com/rrnewton/haskell-lockfree/issues/39, and document them better

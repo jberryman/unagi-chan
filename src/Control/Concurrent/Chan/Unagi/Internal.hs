@@ -8,6 +8,8 @@ module Control.Concurrent.Chan.Unagi.Internal
     , NextSegment(..), StreamHead(..)
     , newChanStarting, writeChan, readChan, readChanOnException
     , dupChan
+    -- For Unagi.NoBlocking:
+    , moveToNextCell, waitingAdvanceStream, newSegmentSource
     )
     where
 
@@ -27,22 +29,21 @@ import Data.Typeable(Typeable)
 import GHC.Exts(inline)
 
 import Control.Concurrent.Chan.Unagi.Constants
+import Utilities(touchIORef)
 
 
 -- | The write end of a channel created with 'newChan'.
-data InChan a = InChan !(Ticket (Cell a)) !(ChanEnd a)
-    deriving Typeable
-
--- | The read end of a channel created with 'newChan'.
-newtype OutChan a = OutChan (ChanEnd a)
+data InChan a = InChan !(Ticket (Cell a)) !(ChanEnd (Cell a))
     deriving Typeable
 
 instance Eq (InChan a) where
     (InChan _ (ChanEnd _ _ headA)) == (InChan _ (ChanEnd _ _ headB))
         = headA == headB
-instance Eq (OutChan a) where
-    (OutChan (ChanEnd _ _ headA)) == (OutChan (ChanEnd _ _ headB))
-        = headA == headB
+
+-- | The read end of a channel created with 'newChan'.
+newtype OutChan a = OutChan (ChanEnd (Cell a))
+    deriving (Eq,Typeable)
+
 
 -- TODO POTENTIAL CPP FLAGS (or functions)
 --   - Strict element (or lazy? maybe also expose a writeChan' when relevant?)
@@ -50,22 +51,33 @@ instance Eq (OutChan a) where
 --   - reads that clear the element immediately (or export as a special function?)
 
 -- InChan & OutChan are mostly identical, sharing a stream, but with
--- independent counters
-data ChanEnd a = 
+-- independent counters.
+--
+--   NOTE: we parameterize this, and its child types, by `cell_a` (instantiated
+--   to `Cell a` in this module) instead of `a` so that we can use
+--   `moveToNextCell`, `waitingAdvanceStream`, and `newSegmentSource` and all
+--   the types below in Unagi.NoBlocking, which uses a different type `Cell a`;
+--   Sorry!
+data ChanEnd cell_a = 
            -- an efficient producer of segments of length sEGMENT_LENGTH:
-    ChanEnd !(SegSource a)
+    ChanEnd !(SegSource cell_a)
             -- Both Chan ends must start with the same counter value.
             !AtomicCounter 
             -- the stream head; this must never point to a segment whose offset
             -- is greater than the counter value
-            !(IORef (StreamHead a))
+            !(IORef (StreamHead cell_a))
     deriving Typeable
 
-data StreamHead a = StreamHead !Int !(Stream a)
+instance Eq (ChanEnd a) where
+     (ChanEnd _ _ headA) == (ChanEnd _ _ headB)
+        = headA == headB
+
+
+data StreamHead cell_a = StreamHead !Int !(Stream cell_a)
 
 --TODO later see if we get a benefit from the small array primops in 7.10,
 --     which omit card-marking overhead and might have faster clone.
-type StreamSegment a = P.MutableArray RealWorld (Cell a)
+type StreamSegment cell_a = P.MutableArray RealWorld cell_a
 
 -- TRANSITIONS and POSSIBLE VALUES:
 --   During Read:
@@ -83,20 +95,20 @@ data Cell a = Empty | Written a | Blocking !(MVar a)
 -- exits we will have allocated ~ 3 segments extra memory than was actually
 -- required.
 
-data Stream a = 
-    Stream !(StreamSegment a)
+data Stream cell_a = 
+    Stream !(StreamSegment cell_a)
            -- The next segment in the stream; new segments are allocated and
            -- put here as we go, with threads cooperating to allocate new
            -- segments:
-           !(IORef (NextSegment a))
+           !(IORef (NextSegment cell_a))
 
-data NextSegment a = NoSegment | Next !(Stream a)
+data NextSegment cell_a = NoSegment | Next !(Stream cell_a)
 
 -- we expose `startingCellOffset` for debugging correct behavior with overflow:
 newChanStarting :: Int -> IO (InChan a, OutChan a)
 {-# INLINE newChanStarting #-}
 newChanStarting !startingCellOffset = do
-    segSource <- newSegmentSource
+    segSource <- newSegmentSource Empty
     firstSeg <- segSource
     -- collect a ticket to save for writer CAS
     savedEmptyTkt <- readArrayElem firstSeg 0
@@ -121,13 +133,15 @@ dupChan (InChan _ (ChanEnd segSource counter streamHead)) = do
     return $ OutChan (ChanEnd segSource counter' streamHead')
   -- [1] We must read the streamHead before inspecting the counter; otherwise,
   -- as writers write, the stream head pointer may advance past the cell
-  -- indicated by wCount.
+  -- indicated by wCount. For the corresponding store-store barrier see [*] in
+  -- moveToNextCell
 
 -- | Write a value to the channel.
 writeChan :: InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
 writeChan (InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) = \a-> mask_ $ do 
-    (segIx, (Stream seg next)) <- moveToNextCell ce
+    (segIx, (Stream seg next), maybeUpdateStreamHead) <- moveToNextCell ce
+    maybeUpdateStreamHead
     (success,nonEmptyTkt) <- casArrayElem seg segIx savedEmptyTkt (Written a)
     -- try to pre-allocate next segment; NOTE [1]
     when (segIx == 0) $ void $
@@ -165,7 +179,8 @@ writeChan (InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) = \a-> mask_ $ do
 readChanOnExceptionUnmasked :: (IO a -> IO a) -> OutChan a -> IO a
 {-# INLINE readChanOnExceptionUnmasked #-}
 readChanOnExceptionUnmasked h = \(OutChan ce)-> do
-    (segIx, (Stream seg _)) <- moveToNextCell ce
+    (segIx, (Stream seg _), maybeUpdateStreamHead) <- moveToNextCell ce
+    maybeUpdateStreamHead
     cellTkt <- readArrayElem seg segIx
     case peekTicket cellTkt of
          Written a -> return a
@@ -208,20 +223,19 @@ readChanOnException :: OutChan a -> (IO a -> IO ()) -> IO a
 readChanOnException c h = mask_ $ 
     readChanOnExceptionUnmasked (\io-> io `onException` (h io)) c
 
+
+------------ NOTE: ALL CODE BELOW IS RE-USED IN Unagi.NoBlocking --------------
+
+
 -- increments counter, finds stream segment of corresponding cell (updating the
 -- stream head pointer as needed), and returns the stream segment and relative
 -- index of our cell.
-moveToNextCell :: ChanEnd a -> IO (Int, Stream a)
+moveToNextCell :: ChanEnd cell_a -> IO (Int, Stream cell_a, IO ())
 {-# INLINE moveToNextCell #-}
 moveToNextCell (ChanEnd segSource counter streamHead) = do
     (StreamHead offset0 str0) <- readIORef streamHead
-    -- NOTE [3]
-#ifdef NOT_x86 
-    -- fetch-and-add is a full barrier on x86; otherwise we need to make sure
-    -- the read above occurrs before our fetch-and-add:
-    loadLoadBarrier
-#endif
-    ix <- incrCounter 1 counter
+    -- NOTE [3/4]
+    ix <- incrCounter 1 counter  -- [*]
     let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
                  divMod_sEGMENT_LENGTH $! (ix - offset0)
               -- (ix - offset0) `quotRem` sEGMENT_LENGTH
@@ -231,11 +245,14 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
             waitingAdvanceStream next segSource (nEW_SEGMENT_WAIT*segIx) -- NOTE [1]
               >>= go (n-1)
     str <- go segsAway str0
-    when (segsAway > 0) $ do
-        let !offsetN = 
-              offset0 + (segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH) --(segsAway*sEGMENT_LENGTH)
-        writeIORef streamHead $ StreamHead offsetN str -- NOTE [2]
-    return (segIx,str)
+    -- In Unagi.NoBlocking we need to control when this is run (see also [5]):
+    let !maybeUpdateStreamHead = do
+          when (segsAway > 0) $ do
+            let !offsetN = 
+                  offset0 + (segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH) --(segsAway*sEGMENT_LENGTH)
+            writeIORef streamHead $ StreamHead offsetN str
+          touchIORef streamHead -- NOTE [5]
+    return (segIx,str, maybeUpdateStreamHead)
   -- [1] All readers or writers needing to work with a not-yet-created segment
   -- race to create it, but those past index 0 have progressively long waits; 20
   -- is chosen as 20 readIORefs should be more than enough time for writer/reader
@@ -250,15 +267,24 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
   -- descheduled, meanwhile other readers/writers increment counter one full
   -- lap; when we increment we think we've found our cell in what is actually a
   -- very old segment. However in this scenario all addressable memory will
-  -- have been consumed just by the array pointers whivh haven't been able to
+  -- have been consumed just by the array pointers which haven't been able to
   -- be GC'd. So I don't think this is something to worry about.
+  --
+  -- [4] We must ensure the read above doesn't move ahead of our incrCounter
+  -- below. But fetchAddByteArrayInt is meant to be a full barrier (for
+  -- compiler and processor) across architectures, so no explicit barrier is
+  -- needed here.
+  --
+  -- [[5]] FOR Unagi.NoBlocking: This helps ensure that our (possibly last) use
+  -- of streamHead occurs after our (possibly last) write, for correctness of
+  -- 'isActive'.  See NOTE 1 of 'Unagi.NoBlocking.writeChan'
 
 
 -- thread-safely try to fill `nextSegRef` at the next offset with a new
 -- segment, waiting some number of iterations (for other threads to handle it).
 -- Returns nextSegRef's StreamSegment.
-waitingAdvanceStream :: IORef (NextSegment a) -> SegSource a 
-                     -> Int -> IO (Stream a)
+waitingAdvanceStream :: IORef (NextSegment cell_a) -> SegSource cell_a 
+                     -> Int -> IO (Stream cell_a)
 waitingAdvanceStream nextSegRef segSource = go where
   go !wait = assert (wait >= 0) $ do
     tk <- readForCAS nextSegRef
@@ -280,13 +306,13 @@ waitingAdvanceStream nextSegRef segSource = go where
 -- copying a template array with cloneMutableArray is much faster than creating
 -- a new one; in fact it seems we need this in order to scale, since as cores
 -- increase we don't have enough "runway" and can't allocate fast enough:
-type SegSource a = IO (StreamSegment a)
+type SegSource cell_a = IO (StreamSegment cell_a)
 
-newSegmentSource :: IO (SegSource a)
-newSegmentSource = do
+newSegmentSource :: cell_a -> IO (SegSource cell_a)
+newSegmentSource cell_empty = do
     -- NOTE: evaluate Empty seems to be required here in order to not raise
     -- "Stored Empty Ticket went stale!"  exception when in GHCi.
-    arr <- evaluate Empty >>= P.newArray sEGMENT_LENGTH
+    arr <- evaluate cell_empty >>= P.newArray sEGMENT_LENGTH
     return (P.cloneMutableArray arr 0 sEGMENT_LENGTH)
 
 -- ----------
