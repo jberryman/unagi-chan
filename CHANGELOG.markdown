@@ -17,5 +17,6 @@
 
 - `Unagi.Unboxed` is now polymorphic in a new `UnagiPrim` class, which permits an optimization; defined instances are the same
 - add new NoBlocking variants with reads that don't block, omiting some overhead
-    - these have a new Stream interface for reads with even lower overhead
-- revisit memory barriers in light of https://github.com/rrnewton/haskell-lockfree/issues/39, and document them better
+    - these have a new `Stream` interface for reads with even lower overhead
+- revisited memory barriers in light of https://github.com/rrnewton/haskell-lockfree/issues/39, and document them better
+- Added `tryReadChan` functions to all variants
