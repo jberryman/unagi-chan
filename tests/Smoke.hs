@@ -2,7 +2,7 @@
 module Smoke (smokeMain) where
 
 import Control.Monad
-import Control.Concurrent(forkIO,threadDelay)
+import Control.Concurrent(forkIO,threadDelay,myThreadId,ThreadId)
 import qualified Control.Concurrent.Chan as C
 import Data.List
 import Control.Exception
@@ -11,12 +11,19 @@ import qualified Control.Exception as E
 import Implementations
 
 -- TODO This is real lame, probably just use async
-lgErrs :: Bool -> String -> IO () -> IO ()
-lgErrs expectingBlock nm = E.handle $ \e-> 
-    let lg = putStrLn $ "!!! EXCEPTION IN "++nm++": "++(show e) 
-    in case E.fromException e of
-            Just BlockedIndefinitelyOnMVar -> when (not expectingBlock) lg
-            Nothing -> lg
+--      Rethrow 
+forkCatching :: Bool -> String -> IO () -> IO ThreadId
+forkCatching expectingBlock nm io = do
+    mainTid <- myThreadId
+    let lg e = do putStrLn $ "!!! EXCEPTION IN "++nm++": "++(show e) 
+                  throwTo mainTid e
+    forkIO $ io `E.catches` [
+                E.Handler (\e -> when (not expectingBlock) $ lg (e :: BlockedIndefinitelyOnMVar))
+              , E.Handler (\e -> case (e :: AsyncException) of 
+                                   ThreadKilled -> return ()
+                                   _ -> lg e  )
+              ]
+
     
 
 smokeMain :: IO ()
@@ -91,13 +98,13 @@ smokeMain = (do
         testContention (unagiBoundedImpl bounds) 2 2 1000000
         testContention (unagiBoundedTryReadImpl bounds) 2 2 1000000
 
-    ) `onException` (threadDelay 1000000) -- wait for lgErrs
+    ) `onException` (threadDelay 1000000) -- wait for forkCatching logging
 
 fifoSmoke :: Implementation inc outc Int -> Int -> IO ()
 fifoSmoke (newChan,writeChan,readChan,_) n = do
     (i,o) <- newChan
     -- we need to fork this for Unagi.Bounded:
-    void $ forkIO $ lgErrs False "fifoSmoke writeChan " $ mapM_ (writeChan i) [1..n]
+    void $ forkCatching False "fifoSmoke writeChan " $ mapM_ (writeChan i) [1..n]
     nsOut <- replicateM n $ readChan o
     unless (nsOut == [1..n]) $
         error "Cough!"
@@ -111,12 +118,13 @@ testContention (newChan,writeChan,readChan,_) writers readers n = do
   out <- C.newChan
 
   (i,o) <- newChan
-  -- some will get blocked indefinitely:
-  void $ replicateM readers $ forkIO $ lgErrs True "testContention readChan o"$ forever $
-      readChan o >>= C.writeChan out
+  -- Real `readChan`s will get BlockedIndefinitelyOnMVar here, when o is dead,
+  -- but we need to kill them explicitly for our *TryReadImpl:
+  rIds <- replicateM readers $ forkCatching True "testContention readChan o"$ forever $
+             readChan o >>= C.writeChan out
   
   putStr $ "    Sending "++(show $ length $ concat groups)++" messages, with "++(show readers)++" readers and "++(show writers)++" writers.... "
-  mapM_ (forkIO . lgErrs False "testContention writeChan i " . mapM_ (writeChan i)) groups
+  mapM_ (forkCatching False "testContention writeChan i " . mapM_ (writeChan i)) groups
 
   ns <- replicateM nNice (C.readChan out)
   isEmpty <- C.isEmptyChan out
@@ -126,6 +134,7 @@ testContention (newChan,writeChan,readChan,_) writers readers n = do
                  then putStrLn $ "OK, BUT WARNING: low interleaving of threads: "++(show $ d)
                  else putStrLn $ "OK" --, with interleaving pct of "++(show $ d)++" (closer to 1 means we have higher confidence in the test)."
       else error "What we put in isn't what we got out :("
+  mapM_ (`throwTo` ThreadKilled) rIds
 
 -- --------- Helpers:
 
