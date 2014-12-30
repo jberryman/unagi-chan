@@ -7,7 +7,7 @@ module Control.Concurrent.Chan.Unagi.Internal
     , InChan(..), OutChan(..), ChanEnd(..), StreamSegment, Cell(..), Stream(..)
     , NextSegment(..), StreamHead(..)
     , newChanStarting, writeChan, readChan, readChanOnException
-    , dupChan
+    , dupChan, tryReadChan
     -- For Unagi.NoBlocking:
     , moveToNextCell, waitingAdvanceStream, newSegmentSource
     )
@@ -29,6 +29,7 @@ import Data.Typeable(Typeable)
 import GHC.Exts(inline)
 
 import Control.Concurrent.Chan.Unagi.Constants
+import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Types as UT
 import Utilities(touchIORef)
 
 
@@ -198,6 +199,33 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
          Blocking v -> readBlocking v
   -- N.B. must use `readMVar` here to support `dupChan`:
   where readBlocking v = inline h $ readMVar v 
+
+
+-- TODO we might want also a blocking `IO a` returned here, or use an opaque
+-- Element type supporting blocking, since otherwise calling `tryReadChan` we
+-- give up the ability to block on that element. Please open an issue if you
+-- need this in the meantime. And also handling of lost elements on async
+-- exceptions.
+
+-- | Returns immediately with an @'UT.Element' a@ future, which returns one
+-- unique element when it becomes available via 'UT.tryRead'. If you're using
+-- this function exclusively you might find the implementation in 
+-- "Control.Concurrent.Chan.Unagi.NoBlocking" is faster.
+--
+-- /Note re. exceptions/: When an async exception is raised during a @tryReadChan@ 
+-- the message that the read would have returned is likely to be lost, just as
+-- it would be when raised directly after this function returns.
+tryReadChan :: OutChan a -> IO (UT.Element a)
+{-# INLINE tryReadChan #-}
+tryReadChan (OutChan ce) = do -- no masking needed
+    (segIx, (Stream seg _), maybeUpdateStreamHead) <- moveToNextCell ce
+    maybeUpdateStreamHead
+    return $ UT.Element $ do
+      cell <- P.readArray seg segIx
+      case cell of
+           Written a  -> return $ Just a
+           Empty      -> return Nothing
+           Blocking v -> tryReadMVar v
 
 
 -- | Read an element from the chan, blocking if the chan is empty.

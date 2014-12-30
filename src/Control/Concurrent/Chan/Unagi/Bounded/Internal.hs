@@ -4,7 +4,7 @@ module Control.Concurrent.Chan.Unagi.Bounded.Internal
     , writerCheckin, unblockWriters, tryWriterCheckin, WriterCheckpoint(..)
     , NextSegment(..), StreamHead(..)
     , newChanStarting, writeChan, readChan, readChanOnException
-    , tryWriteChan
+    , tryWriteChan, tryReadChan
     , dupChan
     )
     where
@@ -28,6 +28,7 @@ import Data.Typeable(Typeable)
 import GHC.Exts(inline)
 
 import Utilities(nextHighestPowerOfTwo)
+import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Types as UT
 
 
 -- | The write end of a channel created with 'newChan'.
@@ -245,16 +246,8 @@ tryWriteChan c@(InChan readCounterReader _ (ChanEnd _ boundsMn1 _ counter _)) = 
 
 readChanOnExceptionUnmasked :: (IO a -> IO a) -> OutChan a -> IO a
 {-# INLINE readChanOnExceptionUnmasked #-}
-readChanOnExceptionUnmasked h = \(OutChan ce@(ChanEnd _ _ segSource _ _))-> do
-    (segIx, nextSeg, updateStreamHeadIfNecessary) <- moveToNextCell asReader ce
-    let (seg,next) = case nextSeg of
-            NextByReader (Stream s n) -> (s,n)
-            _ -> error "moveToNextCell returned a non-reader-installed next segment to readChanOnExceptionUnmasked"
-    -- try to pre-allocate next segment:
-    when (segIx == 0) $ void $
-      waitingAdvanceStream asReader next segSource 0
-
-    updateStreamHeadIfNecessary
+readChanOnExceptionUnmasked h = \oc-> do
+    (seg,segIx) <- startReadChan oc
 
     cellTkt <- readArrayElem seg segIx
     case peekTicket cellTkt of
@@ -273,6 +266,47 @@ readChanOnExceptionUnmasked h = \(OutChan ce@(ChanEnd _ _ segSource _ _))-> do
          Blocking v -> readBlocking v
   -- N.B. must use `readMVar` here to support `dupChan`:
   where readBlocking v = inline h $ readMVar v 
+
+-- factored out for `tryReadChan` below:
+startReadChan :: OutChan a -> IO (StreamSegment a, Int)
+{-# INLINE startReadChan #-}
+startReadChan (OutChan ce@(ChanEnd _ _ segSource _ _)) = do
+    (segIx, nextSeg, updateStreamHeadIfNecessary) <- moveToNextCell asReader ce
+    let (seg,next) = case nextSeg of
+            NextByReader (Stream s n) -> (s,n)
+            _ -> error "moveToNextCell returned a non-reader-installed next segment to readChanOnExceptionUnmasked"
+    -- try to pre-allocate next segment:
+    when (segIx == 0) $ void $
+      waitingAdvanceStream asReader next segSource 0
+
+    updateStreamHeadIfNecessary
+    return (seg,segIx)
+
+
+-- TODO we might want also a blocking `IO a` returned here, or use an opaque
+-- Element type supporting blocking, since otherwise calling `tryReadChan` we
+-- give up the ability to block on that element. Please open an issue if you
+-- need this in the meantime. And also handling of lost elements on async
+-- exceptions.
+
+-- | Returns immediately with an @'UT.Element' a@ future, which returns one
+-- unique element when it becomes available via 'UT.tryRead'.
+--
+-- /Note re. exceptions/: When an async exception is raised during a @tryReadChan@ 
+-- the message that the read would have returned is likely to be lost, just as
+-- it would be when raised directly after this function returns.
+tryReadChan :: OutChan a -> IO (UT.Element a)
+{-# INLINE tryReadChan #-}
+tryReadChan oc = do -- no mask necessary
+    (seg,segIx) <- startReadChan oc
+
+    return $ UT.Element $ do
+        cell <- P.readArray seg segIx
+        case cell of
+             Written a -> return $ Just a
+             Empty -> return Nothing
+             Blocking v -> tryReadMVar v
+
 
 
 -- | Read an element from the chan, blocking if the chan is empty.

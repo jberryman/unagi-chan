@@ -7,6 +7,8 @@ module Control.Concurrent.Chan.Unagi.Unboxed (
     -- ** Reading
     , readChan
     , readChanOnException
+    , tryReadChan
+    , Element(..)
     , getChanContents
     -- ** Writing
     , writeChan
@@ -27,6 +29,7 @@ module Control.Concurrent.Chan.Unagi.Unboxed (
 --   - ...or interop with 'vector' lib
 
 import Control.Concurrent.Chan.Unagi.Unboxed.Internal
+import Control.Concurrent.Chan.Unagi.NoBlocking.Types
 -- For 'writeList2Chan', as in vanilla Chan
 import System.IO.Unsafe ( unsafeInterleaveIO ) 
 

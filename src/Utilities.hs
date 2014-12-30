@@ -3,7 +3,7 @@ module Utilities (
     -- * Utility Chans
     -- ** Indexed MVars
       IndexedMVar()
-    , newIndexedMVar, putMVarIx, readMVarIx
+    , newIndexedMVar, putMVarIx, readMVarIx, tryReadMVarIx
     -- * Other stuff
     , nextHighestPowerOfTwo
     , touchIORef
@@ -36,11 +36,17 @@ readMVarIx :: IndexedMVar a -> Int -> IO a
 readMVarIx mvIx i = do
     readMVar =<< getMVarIx mvIx i
 
+tryReadMVarIx :: IndexedMVar a -> Int -> IO (Maybe a)
+{-# INLINE tryReadMVarIx #-}
+tryReadMVarIx mvIx i = do
+    tryReadMVar =<< getMVarIx mvIx i
+
 putMVarIx :: IndexedMVar a -> Int -> a -> IO ()
 {-# INLINE putMVarIx #-}
 putMVarIx mvIx i a = do
     flip putMVar a =<< getMVarIx mvIx i
 
+-- NOTE: this uses atomic actions to stay async exception safe:
 getMVarIx :: IndexedMVar a -> Int -> IO (MVar a)
 {-# INLINE getMVarIx #-}
 getMVarIx (IndexedMVar v) i = do

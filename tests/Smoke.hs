@@ -30,6 +30,15 @@ smokeMain = (do
     -- ------
     testContention unagiImpl 2 2 1000000
 
+    putStrLn "==================="
+    putStrLn "Testing Unagi (with tryReadChan):"
+    -- ------
+    putStr "    FIFO smoke test... "
+    fifoSmoke unagiTryReadImpl 100000
+    putStrLn "OK"
+    -- ------
+    testContention unagiTryReadImpl 2 2 1000000
+
 
     putStrLn "==================="
     putStrLn "Testing Unagi.NoBlocking:"
@@ -60,16 +69,27 @@ smokeMain = (do
     -- ------
     testContention unboxedUnagiImpl 2 2 1000000
 
+    putStrLn "==================="
+    putStrLn "Testing Unagi.Unboxed (with tryReadChan):"
+    -- ------
+    putStr "    FIFO smoke test... "
+    fifoSmoke unboxedUnagiTryReadImpl 100000
+    putStrLn "OK"
+    -- ------
+    testContention unboxedUnagiTryReadImpl 2 2 1000000
+
 
     forM_ [1, 2, 4, 1024] $ \bounds-> do
         putStrLn "==================="
-        putStrLn $ "Testing Unagi.Bounded with bounds "++(show bounds)
+        putStrLn $ "Testing Unagi.Bounded (and with tryReadChan) with bounds "++(show bounds)
         -- ------
         putStr "    FIFO smoke test... "
         fifoSmoke (unagiBoundedImpl bounds) 100000
+        fifoSmoke (unagiBoundedTryReadImpl bounds) 100000
         putStrLn "OK"
         -- ------
         testContention (unagiBoundedImpl bounds) 2 2 1000000
+        testContention (unagiBoundedTryReadImpl bounds) 2 2 1000000
 
     ) `onException` (threadDelay 1000000) -- wait for lgErrs
 

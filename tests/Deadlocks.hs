@@ -25,6 +25,14 @@ deadlocksMain = do
     putStrLn "OK"
 
     putStrLn "==================="
+    putStrLn "Testing Unagi (with tryReadChan):"
+    -- ------
+    putStr $ "    Checking for deadlocks from killed reader, x"++show tries++"... "
+    checkDeadlocksReader unagiTryReadImpl tries
+    putStrLn "OK"
+    -- No real need to checkDeadlocksWriter for tryReadChan.
+
+    putStrLn "==================="
     putStrLn "Testing Unagi.NoBlocking:"
     -- ------
     putStr $ "    Checking for deadlocks from killed reader, x"++show tries++"... "
@@ -47,6 +55,13 @@ deadlocksMain = do
     putStrLn "OK"
     
     putStrLn "==================="
+    putStrLn "Testing Unagi.Unboxed (with tryReadChan):"
+    -- ------
+    putStr $ "    Checking for deadlocks from killed reader, x"++show tries++"... "
+    checkDeadlocksReader unboxedUnagiTryReadImpl tries
+    putStrLn "OK"
+
+    putStrLn "==================="
     putStrLn "Testing Unagi.Unboxed:"
     -- ------
     putStr $ "    Checking for deadlocks from killed reader, x"++show tries++"... "
@@ -63,6 +78,11 @@ deadlocksMain = do
     putStr $ "    Checking for deadlocks from killed reader, x"++show tries++"... "
     -- bounds must be > 10000 here (note actual bounds rounded up to power of 2):
     checkDeadlocksReader (unagiBoundedImpl 50000) tries
+    putStrLn "OK"
+    -- ------
+    putStr $ "    Checking for deadlocks from killed reader (tryReadChan), x"++show tries++"... "
+    -- bounds must be > 10000 here (note actual bounds rounded up to power of 2):
+    checkDeadlocksReader (unagiBoundedTryReadImpl 50000) tries
     putStrLn "OK"
     -- ------
     putStr $ "    Checking for deadlocks from killed writer, x"++show tries++"... "

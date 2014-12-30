@@ -9,7 +9,7 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
     , readElementArray, writeElementArray
     , NextSegment(..), StreamHead(..), segSource
     , newChanStarting, writeChan, readChan, readChanOnException
-    , dupChan
+    , dupChan, tryReadChan
     -- for NoBlocking.Unboxed
     , moveToNextCell, waitingAdvanceStream, cellEmpty
     )
@@ -76,6 +76,7 @@ import Data.Word(Word,Word8,Word16,Word32,Word64)
 
 import Utilities
 import Control.Concurrent.Chan.Unagi.Constants
+import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Types as UT
 
 -- | The write end of a channel created with 'newChan'.
 newtype InChan a = InChan (ChanEnd a)
@@ -322,6 +323,45 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
   --
   -- [2] casByteArrayInt provides the loadLoadBarrier we need here. See [1] in
   -- writeChan.
+
+
+
+-- TODO we might want also a blocking `IO a` returned here, or use an opaque
+-- Element type supporting blocking, since otherwise calling `tryReadChan` we
+-- give up the ability to block on that element. Please open an issue if you
+-- need this in the meantime. And also handling of lost elements on async
+-- exceptions.
+
+-- | Returns immediately with an @'UT.Element' a@ future, which returns one
+-- unique element when it becomes available via 'UT.tryRead'. If you're using
+-- this function exclusively you might find the implementation in 
+-- "Control.Concurrent.Chan.Unagi.NoBlocking.Unboxed" is faster.
+--
+-- /Note re. exceptions/: When an async exception is raised during a @tryReadChan@ 
+-- the message that the read would have returned is likely to be lost, just as
+-- it would be when raised directly after this function returns.
+tryReadChan :: UnagiPrim a=> OutChan a -> IO (UT.Element a)
+{-# INLINE tryReadChan #-}
+tryReadChan (OutChan ce) = do -- no masking needed
+-- NOTE: implementation adapted from readChanOnExceptionUnmasked:
+    (segIx, (Stream sigArr eArr mvarIndexed _), maybeUpdateStreamHead) <- moveToNextCell ce
+    maybeUpdateStreamHead
+    let readElem = readElementArray eArr segIx
+        slowRead = do 
+           sig <- P.readByteArray sigArr segIx
+           case (sig :: Int) of
+                0 {- Empty -} -> return Nothing
+                1 {- Written -} -> loadLoadBarrier  >>  Just <$> readElem
+                2 {- Blocking -} -> tryReadMVarIx mvarIndexed segIx
+                _ -> error "Invalid signal seen in tryReadChan!"
+    return $ UT.Element $
+      case atomicUnicorn of
+         Just magic -> do
+            el <- readElem
+            if (el /= magic) 
+              then return $ Just el
+              else slowRead
+         Nothing -> slowRead
 
 
 -- | Read an element from the chan, blocking if the chan is empty.
