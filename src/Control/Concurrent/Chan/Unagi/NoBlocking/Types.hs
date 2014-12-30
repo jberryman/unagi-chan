@@ -1,5 +1,10 @@
 module Control.Concurrent.Chan.Unagi.NoBlocking.Types where
 
+import Control.Applicative
+import Control.Monad.Fix
+import Control.Monad
+import Data.Maybe
+
 -- Mostly here to avoid unfortunate name clash with our internal Stream type
 
 
@@ -22,5 +27,36 @@ data Next a = Next a (Stream a) -- ^ The next head element along with the tail @
 -- to @Just a@ when and if an element becomes available, and is idempotent at
 -- that point.
 newtype Element a = Element { tryRead :: IO (Maybe a) }
--- TODO re-use this type when we implement tryReadChan for blocking variants
--- TODO Functor, Applicative, etc. instances
+
+-- Instances cribbed from MaybeT, from transformers v0.4.2.0
+instance Functor Element where
+    fmap f = Element . fmap (fmap f) . tryRead
+
+instance  Applicative Element where
+    pure = return
+    (<*>) = ap
+ 
+instance Alternative Element where
+    empty = mzero
+    (<|>) = mplus
+
+instance Monad Element where
+    fail _ = Element (return Nothing)
+    return = Element . return . return
+    x >>= f = Element $ do
+        v <- tryRead x
+        case v of
+            Nothing -> return Nothing
+            Just y  -> tryRead (f y)
+
+instance MonadPlus Element where
+    mzero = Element (return Nothing)
+    mplus x y = Element $ do
+        v <- tryRead x
+        case v of
+            Nothing -> tryRead y
+            Just _  -> return v
+
+instance MonadFix Element where
+    mfix f = Element (mfix (tryRead . f . fromMaybe bomb))
+      where bomb = error "mfix (Element): inner computation returned Nothing"
