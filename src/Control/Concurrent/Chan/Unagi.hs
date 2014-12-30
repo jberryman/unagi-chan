@@ -14,6 +14,8 @@ module Control.Concurrent.Chan.Unagi (
     -- ** Reading
     , readChan
     , readChanOnException
+    , tryReadChan
+    , Element(..)
     , getChanContents
     -- ** Writing
     , writeChan
@@ -26,6 +28,7 @@ module Control.Concurrent.Chan.Unagi (
 --   - faster write/read-many that increments counter by N
 
 import Control.Concurrent.Chan.Unagi.Internal
+import Control.Concurrent.Chan.Unagi.NoBlocking.Types
 -- For 'writeList2Chan', as in vanilla Chan
 import System.IO.Unsafe ( unsafeInterleaveIO ) 
 
