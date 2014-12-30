@@ -205,7 +205,7 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
 -- Element type supporting blocking, since otherwise calling `tryReadChan` we
 -- give up the ability to block on that element. Please open an issue if you
 -- need this in the meantime. And also handling of lost elements on async
--- exceptions.
+-- exceptions. And also isActive...
 
 -- | Returns immediately with an @'UT.Element' a@ future, which returns one
 -- unique element when it becomes available via 'UT.tryRead'. If you're using
@@ -313,6 +313,7 @@ moveToNextCell (ChanEnd segSource counter streamHead) = do
 -- Returns nextSegRef's StreamSegment.
 waitingAdvanceStream :: IORef (NextSegment cell_a) -> SegSource cell_a 
                      -> Int -> IO (Stream cell_a)
+{-# NOINLINE waitingAdvanceStream #-}
 waitingAdvanceStream nextSegRef segSource = go where
   go !wait = assert (wait >= 0) $ do
     tk <- readForCAS nextSegRef

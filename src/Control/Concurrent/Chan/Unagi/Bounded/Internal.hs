@@ -176,8 +176,9 @@ dupChan (InChan _ _ (ChanEnd logBounds boundsMn1 segSource counter streamHead)) 
 -- argument passed to 'newChan', rounded up to the next highest power of two.
 --
 -- /Note re. exceptions/: In the case that an async exception is raised 
--- while blocking here, the write will succeed. When not blocking, exceptions
--- are masked. Thus writes always succeed once 'writeChan' is entered.
+-- while blocking here, the write will nonetheless succeed. When not blocking,
+-- exceptions are masked. Thus writes always succeed once 'writeChan' is
+-- entered.
 writeChan :: InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
 writeChan c = \a-> writeChanWithBlocking True c a
@@ -287,7 +288,7 @@ startReadChan (OutChan ce@(ChanEnd _ _ segSource _ _)) = do
 -- Element type supporting blocking, since otherwise calling `tryReadChan` we
 -- give up the ability to block on that element. Please open an issue if you
 -- need this in the meantime. And also handling of lost elements on async
--- exceptions.
+-- exceptions. And also isActive...
 
 -- | Returns immediately with an @'UT.Element' a@ future, which returns one
 -- unique element when it becomes available via 'UT.tryRead'.

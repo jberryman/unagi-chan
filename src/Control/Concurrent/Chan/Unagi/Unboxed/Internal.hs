@@ -330,7 +330,7 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
 -- Element type supporting blocking, since otherwise calling `tryReadChan` we
 -- give up the ability to block on that element. Please open an issue if you
 -- need this in the meantime. And also handling of lost elements on async
--- exceptions.
+-- exceptions. And also isActive...
 
 -- | Returns immediately with an @'UT.Element' a@ future, which returns one
 -- unique element when it becomes available via 'UT.tryRead'. If you're using
