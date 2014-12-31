@@ -183,6 +183,8 @@ readChan io oc = tryReadChan oc >>= \el->
 --   possible (e.g. 3:6  is equivalent to 3 sets of 1:2 streaming chans)
 --
 -- TODO MAYBE: overload `streamChan` for Streams too.
+--
+-- TODO MAYBE mechanism for keeping stream consumers from drifting too far apart
 
 
 -- | Produce the specified number of interleaved \"streams\" from a chan.
@@ -206,6 +208,11 @@ readChan io oc = tryReadChan oc >>= \el->
 -- >        -- us we can exit; in other cases we might call 'yield' and then 
 -- >        -- retry that same @'tryReadNext' str@:
 -- >        'Pending' -> return ()
+--
+-- Be aware: if one stream consumer falls behind another (e.g. because it is
+-- slower) the number of elements in the queue which can't be GC'd will grow.
+-- You may want to do some coordination of 'UT.Stream' consumers to prevent
+-- this.
 streamChan :: Int -> OutChan a -> IO [UT.Stream a]
 {-# INLINE streamChan #-}
 streamChan period (OutChan _ (ChanEnd segSource counter streamHead)) = do

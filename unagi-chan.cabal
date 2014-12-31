@@ -84,6 +84,12 @@ library
     cpp-options: -DTRYREADMVAR
   
 -- TODO
+--   For v0,4:
+--   - More benchmarks, and test code we can analyze with ghc-events-analyze.
+--   - Explore faster single-threaded write
+--   - Explore Stream interface for variants other than NoBlocking
+--   - Experiments w/ new GHC 7.10 stuff, and at least make sure buildable
+--  -------
 --  - For GHC 7.10+
 --     - look at small arrays (w/out card-marking)
 --     - re-benchmark array creation and adjust next segment wait

@@ -8,13 +8,13 @@ and you can install it with:
 The idea is to design a queue around the x86 fetch-and-add instruction, which
 performs well under contention.
 
-The queue is conceptually simple, consisting of: an infitinite array, and two
+The queue is conceptually simple, consisting of: an infinite array, and two
 atomic counters, one for readers and another for writers. A read or write
 operation consists of incrementing the appropriate counter and racing to
 perform an atomic operation on the specified index. 
 
 If the writer wins it has written its value for the reader to find and exits.
-When it loses it does a rendevous with the blocked or blocking reader, via
+When it loses it does a rendezvous with the blocked or blocking reader, via
 another mechanism and hands off its value.
 
 ## Linearizabillity

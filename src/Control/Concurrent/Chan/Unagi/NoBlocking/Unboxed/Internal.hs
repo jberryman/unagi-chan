@@ -254,6 +254,11 @@ readChan io oc = tryReadChan oc >>= \el->
 -- >        -- us we can exit; in other cases we might call 'yield' and then 
 -- >        -- retry that same @'tryReadNext' str@:
 -- >        'Pending' -> return ()
+--
+-- Be aware: if one stream consumer falls behind another (e.g. because it is
+-- slower) the number of elements in the queue which can't be GC'd will grow.
+-- You may want to do some coordination of 'UT.Stream' consumers to prevent
+-- this.
 streamChan :: UnagiPrim a=> Int -> OutChan a -> IO [UT.Stream a]
 {-# INLINE streamChan #-}
 streamChan period (OutChan _ (ChanEnd counter streamHead)) = do
