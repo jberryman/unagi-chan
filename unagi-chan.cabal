@@ -1,7 +1,7 @@
 name:                unagi-chan
 version:             0.2.0.1
 
-synopsis:            Fast and scalable concurrent queues for x86, with a Chan-like API
+synopsis:            Fast concurrent queues with a Chan-like API, and more
 
 description:
     This library provides implementations of concurrent FIFO queues (for both
@@ -10,20 +10,34 @@ description:
     limited usefulness outside of x86 architectures where the fetch-and-add
     instruction is not available.
     .
-    We export the following modules.
+    We export several variations of our design; some support additional
+    functionality while others try for lower latency by removing features or
+    making them more restrictive (e.g. in the @Unboxed@ variants). 
     .
-    - @Unagi@: a general-purpose near drop-in replacement for @Chan@
+    - @Unagi@: a general-purpose near drop-in replacement for @Chan@.
     .
-    - @Unagi.Unboxed@: like @Unagi@ but specialized for primitive types
+    - @Unagi.Unboxed@: like @Unagi@ but specialized for primitive types; this
+      may perform better if a queue grows very large.
     .
-    - @Unagi.Bounded@: a bounded variant with blocking and non-blocking writes
+    - @Unagi.Bounded@: a bounded variant with blocking and non-blocking writes,
+      and other functionality where a notion of the queue's capacity is
+      required.
     .
-    - @Unagi.NoBlocking@: lowest latency implementations for when blocking reads aren't required.
+    - @Unagi.NoBlocking@: lowest latency implementations for when blocking
+      reads aren't required.
+    .
+    - @Unagi.NoBlocking.Unboxed@: like @Unagi.NoBlocking@ but for primitive
+      types.
+    .
+    Some of these may be deprecated in the future if they are found to provide
+    little performance benefit, or no unique features; you should benchmark and
+    experiment with them for your use cases, and please submit pull requests
+    for additions to the benchmark suite that reflect what you find.
     .
     Here is an example benchmark measuring the time taken to concurrently write
     and read 100,000 messages, with work divided amongst increasing number of
     readers and writers, comparing against the top-performing queues in the
-    standard libraries, with an inset graph showing a zoomed-in view on the
+    standard libraries. The inset graph shows a zoomed-in view on the
     implementations here.
     .
     <<http://i.imgur.com/J5rLUFn.png>>
@@ -66,9 +80,9 @@ library
 
   ghc-options:        -Wall -funbox-strict-fields
   build-depends:       base < 5
-                     -- be conservative about atomic-primops, for now; really
-                     -- we're fine with any version that passes our tests:
-                     , atomic-primops >= 0.6.0.5 && <= 0.6.0.6
+                     -- Hopefully if atomic-primops breaks in any subtle ways
+                     -- our tests will be sufficient to notice:
+                     , atomic-primops >= 0.6.0.5
                      , primitive>=0.5.3
                      , ghc-prim
   default-language:    Haskell2010
@@ -86,8 +100,8 @@ library
 -- TODO
 --   For v0,4:
 --   - More benchmarks, and test code we can analyze with ghc-events-analyze.
---   - Explore faster single-threaded write
---   - Explore Stream interface for variants other than NoBlocking
+--   - Explore faster single-threaded write (see #11)
+--   - Explore Stream interface for variants other than NoBlocking (see #11)
 --   - Experiments w/ new GHC 7.10 stuff, and at least make sure buildable
 --  -------
 --  - For GHC 7.10+
@@ -129,7 +143,7 @@ test-suite test
     , UnagiUnboxed
   build-depends:       base
                      , primitive>=0.5.3
-                     , atomic-primops >= 0.6.0.5 && <= 0.6.0.6
+                     , atomic-primops >= 0.6.0.5
                      , containers
                      , ghc-prim
   default-language:    Haskell2010

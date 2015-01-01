@@ -21,3 +21,4 @@
     - these have a new `Stream` interface for reads with even lower overhead
 - revisited memory barriers in light of https://github.com/rrnewton/haskell-lockfree/issues/39, and document them better
 - Added `tryReadChan` functions to all variants
+- get rid of upper bounds on `atomic-primops`
