@@ -32,7 +32,7 @@ smokeMain = (do
     putStrLn "Testing Unagi:"
     -- ------
     putStr "    FIFO smoke test... "
-    fifoSmoke unagiImpl 100000
+    fifoSmoke unagiImpl 1000000
     putStrLn "OK"
     -- ------
     testContention unagiImpl 2 2 1000000
@@ -41,7 +41,7 @@ smokeMain = (do
     putStrLn "Testing Unagi (with tryReadChan):"
     -- ------
     putStr "    FIFO smoke test... "
-    fifoSmoke unagiTryReadImpl 100000
+    fifoSmoke unagiTryReadImpl 1000000
     putStrLn "OK"
     -- ------
     testContention unagiTryReadImpl 2 2 1000000
@@ -51,7 +51,7 @@ smokeMain = (do
     putStrLn "Testing Unagi.NoBlocking:"
     -- ------
     putStr "    FIFO smoke test... "
-    fifoSmoke unagiNoBlockingImpl 100000
+    fifoSmoke unagiNoBlockingImpl 1000000
     putStrLn "OK"
     -- ------
     testContention unagiNoBlockingImpl 2 2 1000000
@@ -61,7 +61,7 @@ smokeMain = (do
     putStrLn "Testing Unagi.NoBlocking.Unboxed:"
     -- ------
     putStr "    FIFO smoke test... "
-    fifoSmoke unagiNoBlockingUnboxedImpl 100000
+    fifoSmoke unagiNoBlockingUnboxedImpl 1000000
     putStrLn "OK"
     -- ------
     testContention unagiNoBlockingUnboxedImpl 2 2 1000000
@@ -71,7 +71,7 @@ smokeMain = (do
     putStrLn "Testing Unagi.Unboxed:"
     -- ------
     putStr "    FIFO smoke test... "
-    fifoSmoke unboxedUnagiImpl 100000
+    fifoSmoke unboxedUnagiImpl 1000000
     putStrLn "OK"
     -- ------
     testContention unboxedUnagiImpl 2 2 1000000
@@ -80,7 +80,7 @@ smokeMain = (do
     putStrLn "Testing Unagi.Unboxed (with tryReadChan):"
     -- ------
     putStr "    FIFO smoke test... "
-    fifoSmoke unboxedUnagiTryReadImpl 100000
+    fifoSmoke unboxedUnagiTryReadImpl 1000000
     putStrLn "OK"
     -- ------
     testContention unboxedUnagiTryReadImpl 2 2 1000000
@@ -91,24 +91,36 @@ smokeMain = (do
         putStrLn $ "Testing Unagi.Bounded (and with tryReadChan) with bounds "++(show bounds)
         -- ------
         putStr "    FIFO smoke test... "
-        fifoSmoke (unagiBoundedImpl bounds) 100000
-        fifoSmoke (unagiBoundedTryReadImpl bounds) 100000
+        fifoSmoke (unagiBoundedImpl bounds) 1000000
+        -- because this is slow:
+        when (bounds > 100) $ fifoSmoke (unagiBoundedTryReadImpl bounds) 1000000
         putStrLn "OK"
         -- ------
         testContention (unagiBoundedImpl bounds) 2 2 1000000
-        testContention (unagiBoundedTryReadImpl bounds) 2 2 1000000
+        -- because this is slow:
+        when (bounds > 100) $ testContention (unagiBoundedTryReadImpl bounds) 2 2 1000000
 
     ) `onException` (threadDelay 1000000) -- wait for forkCatching logging
 
+-- Run two concurrent writer threads, making sure their respective sets of
+-- writes arrived in order:
 fifoSmoke :: Implementation inc outc Int -> Int -> IO ()
 fifoSmoke (newChan,writeChan,readChan,_) n = do
     (i,o) <- newChan
-    -- we need to fork this for Unagi.Bounded:
-    void $ forkCatching False "fifoSmoke writeChan " $ mapM_ (writeChan i) [1..n]
-    nsOut <- replicateM n $ readChan o
-    unless (nsOut == [1..n]) $
-        error "Cough!"
+    let forkWriter p = void $ forkCatching False "fifoSmoke writeChan" $ mapM_ (writeChan i) p
+    forkWriter [1..n]
+    forkWriter [negate n .. -1]
+    -- Give a chance for writers to work on both cores, but we need the main
+    -- thread to run concurrently for bounded chans:
+    threadDelay 100000
 
+    nsOut <- replicateM (n*2) $ readChan o
+    let (nsPos,nsNeg) = partition (>0) nsOut
+    unless (nsPos == [1..n] && nsNeg == [negate n .. -1]) $ 
+        error $ "Cough!!"++(show nsOut)
+
+-- Break up a set of unique messages running them through multiple writers to
+-- multiple readers (all concurrently), making sure they all came out the same
 testContention :: Implementation inc outc Int -> Int -> Int -> Int -> IO ()
 testContention (newChan,writeChan,readChan,_) writers readers n = do
   let nNice = n - rem n (lcm writers readers)
@@ -135,6 +147,8 @@ testContention (newChan,writeChan,readChan,_) writers readers n = do
                  else putStrLn $ "OK" --, with interleaving pct of "++(show $ d)++" (closer to 1 means we have higher confidence in the test)."
       else error "What we put in isn't what we got out :("
   mapM_ (`throwTo` ThreadKilled) rIds
+
+
 
 -- --------- Helpers:
 
