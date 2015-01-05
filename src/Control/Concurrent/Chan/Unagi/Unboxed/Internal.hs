@@ -183,19 +183,19 @@ class (P.Prim a, Eq a)=> UnagiPrim a where
 
 
 -- These ought all to be atomic for 32-bit or 64-bit systems:
-instance UnagiPrim Char	where
+instance UnagiPrim Char where
     atomicUnicorn = Just '\1010101'
 instance UnagiPrim Float where
     atomicUnicorn = Just 0xDADADA
 instance UnagiPrim Int where
     atomicUnicorn = Just 0xDADADA
-instance UnagiPrim Int8	where
+instance UnagiPrim Int8 where
     atomicUnicorn = Just 113
 instance UnagiPrim Int16 where
     atomicUnicorn = Just 0xDAD
 instance UnagiPrim Int32 where
     atomicUnicorn = Just 0xDADADA
-instance UnagiPrim Word	where
+instance UnagiPrim Word where
     atomicUnicorn = Just 0xDADADA
 instance UnagiPrim Word8 where
     atomicUnicorn = Just 0xDA
