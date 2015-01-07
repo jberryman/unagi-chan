@@ -22,3 +22,8 @@
 - revisited memory barriers in light of https://github.com/rrnewton/haskell-lockfree/issues/39, and document them better
 - Added `tryReadChan` functions to all variants
 - get rid of upper bounds on `atomic-primops`
+
+### 0.3.0.1
+
+- fix upper bounds on atomic-primops again (made as revision to cabal metadata for 0.3.0.0
+- fix some docs

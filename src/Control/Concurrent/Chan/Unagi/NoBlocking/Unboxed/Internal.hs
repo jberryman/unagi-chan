@@ -240,20 +240,22 @@ readChan io oc = tryReadChan oc >>= \el->
 --
 -- Usage example:
 --
--- > do mapM_ ('writeChan' i) [1..9]
--- >    [str1, str2, str2] <- 'streamChan' 3 o
--- >    forkIO $ printStream str1   -- prints: 1,4,7
--- >    forkIO $ printStream str2   -- prints: 2,5,8
--- >    forkIO $ printStream str3   -- prints: 3,6,9
--- >  where 
--- >    printStream str = do
--- >      h <- 'tryReadNext' str
--- >      case h of
--- >        'Next' a str' -> print a >> printStream str'
--- >        -- We know that all values were already written, so a Pending tells 
--- >        -- us we can exit; in other cases we might call 'yield' and then 
--- >        -- retry that same @'tryReadNext' str@:
--- >        'Pending' -> return ()
+-- @
+--   do mapM_ ('writeChan' i) [1..9]
+--      [str1, str2, str2] <- 'streamChan' 3 o
+--      forkIO $ printStream str1   -- prints: 1,4,7
+--      forkIO $ printStream str2   -- prints: 2,5,8
+--      forkIO $ printStream str3   -- prints: 3,6,9
+--    where 
+--      printStream str = do
+--        h <- 'tryReadNext' str
+--        case h of
+--          'Next' a str' -> print a >> printStream str'
+--          -- We know that all values were already written, so a Pending tells 
+--          -- us we can exit; in other cases we might call 'yield' and then 
+--          -- retry that same @'tryReadNext' str@:
+--          'Pending' -> return ()
+-- @
 --
 -- Be aware: if one stream consumer falls behind another (e.g. because it is
 -- slower) the number of elements in the queue which can't be GC'd will grow.
