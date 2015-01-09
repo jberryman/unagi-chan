@@ -27,3 +27,17 @@ in temporal order.
 
 Operations are non-blocking, with the exception that a stalled writer may block
 at most one reader (the reader "assigned" to it by our internal counter).
+
+## Performance
+
+Here is an example benchmark measuring the time taken to concurrently write and
+read 100,000 messages, with work divided amongst increasing number of readers
+and writers, comparing against the top-performing queues in the standard
+libraries. The inset graph shows a zoomed-in view on the implementations here.
+
+![Benchmarks](http://i.imgur.com/J5rLUFn.png)
+
+Some of these variants may be deprecated in the future if they are found to
+provide little performance benefit, or no unique features; you should benchmark
+and experiment with them for your use cases, and please submit pull requests
+for additions to the benchmark suite that reflect what you find.
