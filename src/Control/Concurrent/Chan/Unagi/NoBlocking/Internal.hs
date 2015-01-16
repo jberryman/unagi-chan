@@ -202,13 +202,13 @@ readChan io oc = tryReadChan oc >>= \el->
 --      forkIO $ printStream str3   -- prints: 3,6,9
 --    where 
 --      printStream str = do
---        h <- 'tryReadNext' str
+--        h <- 'UT.tryReadNext' str
 --        case h of
---          'Next' a str' -> print a >> printStream str'
+--          'UT.Next' a str' -> print a >> printStream str'
 --          -- We know that all values were already written, so a Pending tells 
 --          -- us we can exit; in other cases we might call 'yield' and then 
---          -- retry that same @'tryReadNext' str@:
---          'Pending' -> return ()
+--          -- retry that same @'UT.tryReadNext' str@:
+--          'UT.Pending' -> return ()
 -- @
 --
 -- Be aware: if one stream consumer falls behind another (e.g. because it is
