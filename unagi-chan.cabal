@@ -140,6 +140,9 @@ test-suite test
     , Smoke
     , Unagi
     , UnagiUnboxed
+    , UnagiBounded
+    , UnagiNoBlocking
+    , UnagiNoBlockingUnboxed
   build-depends:       base
                      , primitive>=0.5.3
                      , atomic-primops >= 0.6.0.5 && <= 0.6.1
