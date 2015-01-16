@@ -122,7 +122,9 @@ library
 test-suite test
   type: exitcode-stdio-1.0
   ghc-options: -Wall -funbox-strict-fields
-  ghc-options: -O2  -rtsopts  -threaded -with-rtsopts=-N
+  ghc-options: -O2  -rtsopts  -threaded 
+  -- NOTE: configure --enable-profiling overrides this:
+  ghc-options: -with-rtsopts=-N
   ghc-options: -fno-ignore-asserts
   -- for some hacks for Addr:
   ghc-options: -fno-warn-orphans 
