@@ -27,3 +27,8 @@
 
 - fix upper bounds on atomic-primops again (made as revision to cabal metadata for 0.3.0.0
 - fix some docs
+
+### 0.3.0.2
+
+- re-bump atomic-primops version; should now support 7.10
+- fix missing other-modules for test suite
