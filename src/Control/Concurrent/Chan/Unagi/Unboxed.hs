@@ -43,7 +43,7 @@ newChan = newChanStarting (maxBound - 10)
 -- like System.IO.hGetContents.
 getChanContents :: UnagiPrim a=> OutChan a -> IO [a]
 getChanContents ch = unsafeInterleaveIO (do
-                            x  <- readChan ch
+                            x  <- unsafeInterleaveIO $ readChan ch
                             xs <- getChanContents ch
                             return (x:xs)
                         )

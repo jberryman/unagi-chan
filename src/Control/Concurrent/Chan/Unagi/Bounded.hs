@@ -51,7 +51,7 @@ newChan size = newChanStarting (maxBound - 10) size
 -- like System.IO.hGetContents.
 getChanContents :: OutChan a -> IO [a]
 getChanContents ch = unsafeInterleaveIO (do
-                            x  <- readChan ch
+                            x  <- unsafeInterleaveIO $ readChan ch
                             xs <- getChanContents ch
                             return (x:xs)
                         )

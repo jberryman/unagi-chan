@@ -32,3 +32,4 @@
 
 - re-bump atomic-primops version; should now support 7.10
 - fix missing other-modules for test suite
+- fix getChanContents for GHC 7.10 (see GHC Trac #9965) 
