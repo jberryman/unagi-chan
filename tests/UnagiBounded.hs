@@ -14,6 +14,8 @@ import Control.Applicative
 
 import Data.Maybe(isNothing)
 
+import Prelude
+
 unagiBoundedMain :: IO ()
 unagiBoundedMain = do
     putStrLn "==================="

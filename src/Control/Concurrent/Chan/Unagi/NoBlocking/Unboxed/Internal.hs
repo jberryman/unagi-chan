@@ -37,6 +37,8 @@ import Data.Maybe
 
 import Control.Concurrent.Chan.Unagi.Constants
 
+import Prelude
+
 -- We can re-use much of the Unagi.Unboxed implementation here, and some of
 -- Unagi.NoBlocking (at least our types, which is important):
 import Control.Concurrent.Chan.Unagi.Unboxed.Internal(

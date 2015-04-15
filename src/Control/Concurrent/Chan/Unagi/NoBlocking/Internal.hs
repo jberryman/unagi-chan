@@ -40,6 +40,8 @@ import Control.Concurrent.Chan.Unagi.Internal(
 import Control.Concurrent.Chan.Unagi.Constants
 import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Types as UT
 
+import Prelude
+
 
 -- | The write end of a channel created with 'newChan'.
 data InChan a = InChan !(IORef Bool) -- Used for creating an OutChan in dupChan

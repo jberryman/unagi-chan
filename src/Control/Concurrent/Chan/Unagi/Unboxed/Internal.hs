@@ -78,6 +78,8 @@ import Utilities
 import Control.Concurrent.Chan.Unagi.Constants
 import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Types as UT
 
+import Prelude
+
 -- | The write end of a channel created with 'newChan'.
 newtype InChan a = InChan (ChanEnd a)
     deriving Typeable

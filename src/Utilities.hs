@@ -20,6 +20,7 @@ import GHC.Prim(touch#)
 import GHC.IORef(IORef(..))
 import GHC.STRef(STRef(..))
 import GHC.Base(IO(..))
+import Prelude
 
 -- For now: a reverse-ordered assoc list; an IntMap might be better
 newtype IndexedMVar a = IndexedMVar (IORef [(Int, MVar a)])

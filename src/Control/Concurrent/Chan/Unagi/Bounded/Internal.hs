@@ -30,6 +30,7 @@ import GHC.Exts(inline)
 import Utilities(nextHighestPowerOfTwo)
 import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Types as UT
 
+import Prelude
 
 -- | The write end of a channel created with 'newChan'.
 data InChan a = InChan (IO Int) -- readCounterReader, for tryWriteChan

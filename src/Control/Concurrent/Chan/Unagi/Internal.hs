@@ -32,6 +32,7 @@ import Control.Concurrent.Chan.Unagi.Constants
 import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Types as UT
 import Utilities(touchIORef)
 
+import Prelude
 
 -- | The write end of a channel created with 'newChan'.
 data InChan a = InChan !(Ticket (Cell a)) !(ChanEnd (Cell a))
