@@ -33,6 +33,18 @@ deadlocksMain = do
     -- No real need to checkDeadlocksWriter for tryReadChan.
 
     putStrLn "==================="
+    putStrLn "Testing Unagi (with tryReadChan, blocking):"
+    -- ------
+    putStr $ "    Checking for deadlocks from killed reader, x"++show tries++"... "
+    checkDeadlocksReader unagiTryReadBlockingImpl tries
+    putStrLn "OK"
+    -- ------
+    putStr $ "    Checking for deadlocks from killed writer, x"++show tries++"... "
+    checkDeadlocksWriter unagiTryReadBlockingImpl tries
+    putStrLn "OK"
+
+
+    putStrLn "==================="
     putStrLn "Testing Unagi.NoBlocking:"
     -- ------
     putStr $ "    Checking for deadlocks from killed reader, x"++show tries++"... "
@@ -60,6 +72,17 @@ deadlocksMain = do
     putStr $ "    Checking for deadlocks from killed reader, x"++show tries++"... "
     checkDeadlocksReader unboxedUnagiTryReadImpl tries
     putStrLn "OK"
+    
+    putStrLn "==================="
+    putStrLn "Testing Unagi.NoBlocking.Unboxed (with tryReadChan, blocking):"
+    -- ------
+    putStr $ "    Checking for deadlocks from killed reader, x"++show tries++"... "
+    checkDeadlocksReader unboxedUnagiTryReadBlockingImpl tries
+    putStrLn "OK"
+    -- ------
+    putStr $ "    Checking for deadlocks from killed writer, x"++show tries++"... "
+    checkDeadlocksWriter unboxedUnagiTryReadBlockingImpl tries
+    putStrLn "OK"
 
     putStrLn "==================="
     putStrLn "Testing Unagi.Unboxed:"
@@ -85,10 +108,16 @@ deadlocksMain = do
     checkDeadlocksReader (unagiBoundedTryReadImpl 50000) tries
     putStrLn "OK"
     -- ------
+    putStr $ "    Checking for deadlocks from killed reader (tryReadChan, blocking), x"++show tries++"... "
+    -- bounds must be > 10000 here (note actual bounds rounded up to power of 2):
+    checkDeadlocksReader (unagiBoundedTryReadBlockingImpl 50000) tries
+    putStrLn "OK"
+    -- ------
     putStr $ "    Checking for deadlocks from killed writer, x"++show tries++"... "
     -- fragile bounds must be large enought to never be reached here:
     checkDeadlocksWriterBounded tries
     putStrLn "OK"
+    -- TODO same test for unagiBoundedTryReadBlockingImpl
 
 
 -- -- Chan002.hs -- --

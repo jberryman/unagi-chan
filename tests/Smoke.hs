@@ -45,7 +45,15 @@ smokeMain = (do
     putStrLn "OK"
     -- ------
     testContention unagiTryReadImpl 2 2 1000000
-
+    
+    putStrLn "==================="
+    putStrLn "Testing Unagi (with tryReadChan, blocking):"
+    -- ------
+    putStr "    FIFO smoke test... "
+    fifoSmoke unagiTryReadBlockingImpl 1000000
+    putStrLn "OK"
+    -- ------
+    testContention unagiTryReadBlockingImpl 2 2 1000000
 
     putStrLn "==================="
     putStrLn "Testing Unagi.NoBlocking:"
@@ -99,6 +107,31 @@ smokeMain = (do
         testContention (unagiBoundedImpl bounds) 2 2 1000000
         -- because this is slow:
         when (bounds > 100) $ testContention (unagiBoundedTryReadImpl bounds) 2 2 1000000
+
+    putStrLn "==================="
+    putStrLn "Testing Unagi.Unboxed (with tryReadChan, blocking):"
+    -- ------
+    putStr "    FIFO smoke test... "
+    fifoSmoke unboxedUnagiTryReadBlockingImpl 1000000
+    putStrLn "OK"
+    -- ------
+    testContention unboxedUnagiTryReadBlockingImpl 2 2 1000000
+
+
+    forM_ [1, 2, 4, 1024] $ \bounds-> do
+        putStrLn "==================="
+        putStrLn $ "Testing Unagi.Bounded (and with tryReadChan) with bounds "++(show bounds)
+        -- ------
+        putStr "    FIFO smoke test... "
+        fifoSmoke (unagiBoundedImpl bounds) 1000000
+        -- because this is slow:
+        when (bounds > 100) $ fifoSmoke (unagiBoundedTryReadBlockingImpl bounds) 1000000
+        putStrLn "OK"
+        -- ------
+        testContention (unagiBoundedImpl bounds) 2 2 1000000
+        -- because this is slow:
+        when (bounds > 100) $ testContention (unagiBoundedTryReadBlockingImpl bounds) 2 2 1000000
+
 
     ) `onException` (threadDelay 1000000) -- wait for forkCatching logging
 

@@ -33,6 +33,18 @@ dupChanMain = do
     putStr "    Writer/dupChan+Reader... "
     replicateM_ 1000 $ dupChanTest2 unagiTryReadImpl 10000
     putStrLn "OK"
+    
+    putStrLn "==================="
+    putStrLn "Test dupChan Unagi (with tryReadChan, blocking):"
+    -- ------
+    putStr "    Reader/Reader... "
+    replicateM_ 1000 $ dupChanTest1 unagiTryReadBlockingImpl 50000
+    putStrLn "OK"
+    -- ------
+    putStr "    Writer/dupChan+Reader... "
+    replicateM_ 1000 $ dupChanTest2 unagiTryReadBlockingImpl 10000
+    putStrLn "OK"
+
 
     putStrLn "==================="
     putStrLn "Test dupChan Unagi.NoBlocking:"
@@ -79,6 +91,17 @@ dupChanMain = do
     putStrLn "OK"
 
     putStrLn "==================="
+    putStrLn "Test dupChan Unagi.Unboxed (with tryReadChan, blocking):"
+    -- ------
+    putStr "    Reader/Reader... "
+    replicateM_ 1000 $ dupChanTest1 unboxedUnagiTryReadBlockingImpl 50000
+    putStrLn "OK"
+    -- ------
+    putStr "    Writer/dupChan+Reader... "
+    replicateM_ 1000 $ dupChanTest2 unboxedUnagiTryReadBlockingImpl 10000
+    putStrLn "OK"
+
+    putStrLn "==================="
     putStrLn "Test dupChan Unagi.Bounded (and with tryRead)"
     -- NOTE: n must be <= bounds in dupChanTest1:
     forM_ [(4096,4096),(65536,50000),(4,2)] $ \(bounds, n)-> do
@@ -86,11 +109,13 @@ dupChanMain = do
         putStr $ "    Reader/Reader with bounds "++(show bounds)++"... "
         replicateM_ 100 $ dupChanTest1 (unagiBoundedImpl bounds) n
         replicateM_ 100 $ dupChanTest1 (unagiBoundedTryReadImpl bounds) n
+        replicateM_ 100 $ dupChanTest1 (unagiBoundedTryReadBlockingImpl bounds) n
         putStrLn "OK"
     forM_ [2, 1024, 65536] $ \bounds-> do
         putStr $ "    Writer/dupChan+Reader with bounds "++(show bounds)++"... "
         replicateM_ 100 $ dupChanTest2 (unagiBoundedImpl bounds) 10000
         replicateM_ 100 $ dupChanTest2 (unagiBoundedTryReadImpl bounds) 10000
+        replicateM_ 100 $ dupChanTest2 (unagiBoundedTryReadBlockingImpl bounds) 10000
         putStrLn "OK"
 
 -- Check output where dupChan at known point in input stream, with two

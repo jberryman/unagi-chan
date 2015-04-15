@@ -285,13 +285,14 @@ writeChan (InChan ce) = \a-> mask_ $ do
   -- [1] casByteArrayInt provides the write barrier we need here to make sure
   -- GHC maintains our ordering such that the element is written before we
   -- signal its availability with the CAS to sigArr that follows. See [2] in
-  -- readChanOnExceptionUnmasked.
+  -- readSegIxUnmasked.
 
 
-readChanOnExceptionUnmasked :: UnagiPrim a=> (IO a -> IO a) -> OutChan a -> IO a
-{-# INLINE readChanOnExceptionUnmasked #-}
-readChanOnExceptionUnmasked h = \(OutChan ce)-> do
-    (segIx, (Stream sigArr eArr mvarIndexed _), maybeUpdateStreamHead) <- moveToNextCell ce
+-- Core of blocking read functions, taking handler and output of moveToNextCell
+readSegIxUnmasked :: UnagiPrim a=> (IO a -> IO a) -> (Int, Stream a, IO ()) -> IO a
+{-# INLINE readSegIxUnmasked #-}
+readSegIxUnmasked h =
+  \(segIx, (Stream sigArr eArr mvarIndexed _), maybeUpdateStreamHead)-> do
     maybeUpdateStreamHead
     let readBlocking = inline h $ readMVarIx mvarIndexed segIx    -- NOTE [1]
         readElem = readElementArray eArr segIx
@@ -305,7 +306,7 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
                 1 {- Written -} -> readElem
                 -- else in the meantime a dupChan reader read, blocking
                 2 {- Blocking -} -> readBlocking
-                _ -> error "Invalid signal seen in readChanOnExceptionUnmasked!"
+                _ -> error "Invalid signal seen in readSegIxUnmasked!"
     -- If we know writes of this element are atomic, we can determine if the
     -- element has been written, and possibly return it without consulting
     -- sigArr.
@@ -332,19 +333,24 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
 -- need this in the meantime. And also handling of lost elements on async
 -- exceptions. And also isActive...
 
--- | Returns immediately with an @'UT.Element' a@ future, which returns one
--- unique element when it becomes available via 'UT.tryRead'. If you're using
--- this function exclusively you might find the implementation in 
--- "Control.Concurrent.Chan.Unagi.NoBlocking.Unboxed" is faster.
+-- | Returns immediately with:
+--
+--  - an @'UT.Element' a@ future, which returns one unique element when it
+--  becomes available via 'UT.tryRead'.
+--
+--  - a blocking @IO@ action that returns the element when it becomes available.
+--
+-- If you're using this function exclusively you might find the implementation
+-- in "Control.Concurrent.Chan.Unagi.NoBlocking.Unboxed" is faster.
 --
 -- /Note re. exceptions/: When an async exception is raised during a @tryReadChan@ 
 -- the message that the read would have returned is likely to be lost, just as
 -- it would be when raised directly after this function returns.
-tryReadChan :: UnagiPrim a=> OutChan a -> IO (UT.Element a)
+tryReadChan :: UnagiPrim a=> OutChan a -> IO (UT.Element a, IO a)
 {-# INLINE tryReadChan #-}
 tryReadChan (OutChan ce) = do -- no masking needed
--- NOTE: implementation adapted from readChanOnExceptionUnmasked:
-    (segIx, (Stream sigArr eArr mvarIndexed _), maybeUpdateStreamHead) <- moveToNextCell ce
+-- NOTE: implementation adapted from readSegIxUnmasked:
+    segStuff@(segIx, (Stream sigArr eArr mvarIndexed _), maybeUpdateStreamHead) <- moveToNextCell ce
     maybeUpdateStreamHead
     let readElem = readElementArray eArr segIx
         slowRead = do 
@@ -354,14 +360,18 @@ tryReadChan (OutChan ce) = do -- no masking needed
                 1 {- Written -} -> loadLoadBarrier  >>  Just <$> readElem
                 2 {- Blocking -} -> tryReadMVarIx mvarIndexed segIx
                 _ -> error "Invalid signal seen in tryReadChan!"
-    return $ UT.Element $
-      case atomicUnicorn of
-         Just magic -> do
-            el <- readElem
-            if (el /= magic) 
-              then return $ Just el
-              else slowRead
-         Nothing -> slowRead
+    return ( 
+        UT.Element $
+          case atomicUnicorn of
+             Just magic -> do
+                el <- readElem
+                if (el /= magic) 
+                  then return $ Just el
+                  else slowRead
+             Nothing -> slowRead
+
+      , readSegIxUnmasked id segStuff
+      )
 
 
 -- | Read an element from the chan, blocking if the chan is empty.
@@ -372,7 +382,7 @@ tryReadChan (OutChan ce) = do -- no masking needed
 -- this scenario, you can use 'readChanOnException'.
 readChan :: UnagiPrim a=> OutChan a -> IO a
 {-# INLINE readChan #-}
-readChan = readChanOnExceptionUnmasked id
+readChan = \(OutChan ce)-> moveToNextCell ce >>= readSegIxUnmasked id
 
 -- | Like 'readChan' but allows recovery of the queue element which would have
 -- been read, in the case that an async exception is raised during the read. To
@@ -384,8 +394,9 @@ readChan = readChanOnExceptionUnmasked id
 -- the passed @IO a@ is the only way to access the element.
 readChanOnException :: UnagiPrim a=> OutChan a -> (IO a -> IO ()) -> IO a
 {-# INLINE readChanOnException #-}
-readChanOnException c h = mask_ $ 
-    readChanOnExceptionUnmasked (\io-> io `onException` (h io)) c
+readChanOnException (OutChan ce) h = mask_ $ 
+    moveToNextCell ce >>=
+      readSegIxUnmasked (\io-> io `onException` (h io))
 
 
 

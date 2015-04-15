@@ -177,10 +177,10 @@ writeChan (InChan savedEmptyTkt ce@(ChanEnd segSource _ _)) = \a-> mask_ $ do
 -- from whether cakes are given to well-behaved customers in the order they
 -- came out of the oven, or whether a customer leaving at the wrong moment
 -- might cause the cake shop to burn down...
-readChanOnExceptionUnmasked :: (IO a -> IO a) -> OutChan a -> IO a
-{-# INLINE readChanOnExceptionUnmasked #-}
-readChanOnExceptionUnmasked h = \(OutChan ce)-> do
-    (segIx, (Stream seg _), maybeUpdateStreamHead) <- moveToNextCell ce
+readSegIxUnmasked :: (IO a -> IO a) -> (Int, Stream (Cell a), IO ()) -> IO a
+{-# INLINE readSegIxUnmasked #-}
+readSegIxUnmasked h =
+  \(segIx, (Stream seg _), maybeUpdateStreamHead)-> do
     maybeUpdateStreamHead
     cellTkt <- readArrayElem seg segIx
     case peekTicket cellTkt of
@@ -201,31 +201,34 @@ readChanOnExceptionUnmasked h = \(OutChan ce)-> do
   where readBlocking v = inline h $ readMVar v 
 
 
--- TODO we might want also a blocking `IO a` returned here, or use an opaque
--- Element type supporting blocking, since otherwise calling `tryReadChan` we
--- give up the ability to block on that element. Please open an issue if you
--- need this in the meantime. And also handling of lost elements on async
--- exceptions. And also isActive...
-
--- | Returns immediately with an @'UT.Element' a@ future, which returns one
--- unique element when it becomes available via 'UT.tryRead'. If you're using
--- this function exclusively you might find the implementation in 
--- "Control.Concurrent.Chan.Unagi.NoBlocking" is faster.
+-- | Returns immediately with:
+--
+--  - an @'UT.Element' a@ future, which returns one unique element when it
+--  becomes available via 'UT.tryRead'.
+--
+--  - a blocking @IO@ action that returns the element when it becomes available.
+--
+-- If you're using this function exclusively you might find the implementation
+-- in "Control.Concurrent.Chan.Unagi.NoBlocking" is faster.
 --
 -- /Note re. exceptions/: When an async exception is raised during a @tryReadChan@ 
 -- the message that the read would have returned is likely to be lost, just as
 -- it would be when raised directly after this function returns.
-tryReadChan :: OutChan a -> IO (UT.Element a)
+tryReadChan :: OutChan a -> IO (UT.Element a, IO a)
 {-# INLINE tryReadChan #-}
 tryReadChan (OutChan ce) = do -- no masking needed
-    (segIx, (Stream seg _), maybeUpdateStreamHead) <- moveToNextCell ce
+    segStuff@(segIx, (Stream seg _), maybeUpdateStreamHead) <- moveToNextCell ce
     maybeUpdateStreamHead
-    return $ UT.Element $ do
-      cell <- P.readArray seg segIx
-      case cell of
-           Written a  -> return $ Just a
-           Empty      -> return Nothing
-           Blocking v -> tryReadMVar v
+    return ( 
+        UT.Element $ do
+          cell <- P.readArray seg segIx
+          case cell of
+               Written a  -> return $ Just a
+               Empty      -> return Nothing
+               Blocking v -> tryReadMVar v
+
+      , readSegIxUnmasked id segStuff 
+      )
 
 
 -- | Read an element from the chan, blocking if the chan is empty.
@@ -236,7 +239,7 @@ tryReadChan (OutChan ce) = do -- no masking needed
 -- this scenario, you can use 'readChanOnException'.
 readChan :: OutChan a -> IO a
 {-# INLINE readChan #-}
-readChan = readChanOnExceptionUnmasked id
+readChan = \(OutChan ce)-> moveToNextCell ce >>= readSegIxUnmasked id
 
 -- | Like 'readChan' but allows recovery of the queue element which would have
 -- been read, in the case that an async exception is raised during the read. To
@@ -248,8 +251,9 @@ readChan = readChanOnExceptionUnmasked id
 -- the passed @IO a@ is the only way to access the element.
 readChanOnException :: OutChan a -> (IO a -> IO ()) -> IO a
 {-# INLINE readChanOnException #-}
-readChanOnException c h = mask_ $ 
-    readChanOnExceptionUnmasked (\io-> io `onException` (h io)) c
+readChanOnException (OutChan ce) h = mask_ ( 
+    moveToNextCell ce >>= 
+      readSegIxUnmasked (\io-> io `onException` (h io)) )
 
 
 ------------ NOTE: ALL CODE BELOW IS RE-USED IN Unagi.NoBlocking --------------

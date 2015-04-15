@@ -245,11 +245,10 @@ tryWriteChan c@(InChan readCounterReader _ (ChanEnd _ boundsMn1 _ counter _)) = 
         else writeChanWithBlocking False c a >> return True
 
 
-readChanOnExceptionUnmasked :: (IO a -> IO a) -> OutChan a -> IO a
-{-# INLINE readChanOnExceptionUnmasked #-}
-readChanOnExceptionUnmasked h = \oc-> do
-    (seg,segIx) <- startReadChan oc
-
+-- The core of our 'read' operations, with exception handler:
+readSegIxUnmasked :: (IO a -> IO a) -> (StreamSegment a, Int) -> IO a
+{-# INLINE readSegIxUnmasked #-}
+readSegIxUnmasked h = \(seg,segIx)-> do
     cellTkt <- readArrayElem seg segIx
     case peekTicket cellTkt of
          Written a -> return a
@@ -275,7 +274,7 @@ startReadChan (OutChan ce@(ChanEnd _ _ segSource _ _)) = do
     (segIx, nextSeg, updateStreamHeadIfNecessary) <- moveToNextCell asReader ce
     let (seg,next) = case nextSeg of
             NextByReader (Stream s n) -> (s,n)
-            _ -> error "moveToNextCell returned a non-reader-installed next segment to readChanOnExceptionUnmasked"
+            _ -> error "moveToNextCell returned a non-reader-installed next segment to readSegIxUnmasked"
     -- try to pre-allocate next segment:
     when (segIx == 0) $ void $
       waitingAdvanceStream asReader next segSource 0
@@ -284,29 +283,32 @@ startReadChan (OutChan ce@(ChanEnd _ _ segSource _ _)) = do
     return (seg,segIx)
 
 
--- TODO we might want also a blocking `IO a` returned here, or use an opaque
--- Element type supporting blocking, since otherwise calling `tryReadChan` we
--- give up the ability to block on that element. Please open an issue if you
--- need this in the meantime. And also handling of lost elements on async
--- exceptions. And also isActive...
 
--- | Returns immediately with an @'UT.Element' a@ future, which returns one
--- unique element when it becomes available via 'UT.tryRead'.
+-- | Returns immediately with:
+--
+--  - an @'UT.Element' a@ future, which returns one unique element when it
+--  becomes available via 'UT.tryRead'.
+--
+--  - a blocking @IO@ action that returns the element when it becomes available.
 --
 -- /Note re. exceptions/: When an async exception is raised during a @tryReadChan@ 
 -- the message that the read would have returned is likely to be lost, just as
 -- it would be when raised directly after this function returns.
-tryReadChan :: OutChan a -> IO (UT.Element a)
+tryReadChan :: OutChan a -> IO (UT.Element a, IO a)
 {-# INLINE tryReadChan #-}
 tryReadChan oc = do -- no mask necessary
     (seg,segIx) <- startReadChan oc
 
-    return $ UT.Element $ do
+    return ( 
+       UT.Element $ do
         cell <- P.readArray seg segIx
         case cell of
              Written a -> return $ Just a
              Empty -> return Nothing
              Blocking v -> tryReadMVar v
+
+     , readSegIxUnmasked id (seg,segIx)
+     )
 
 
 
@@ -318,7 +320,7 @@ tryReadChan oc = do -- no mask necessary
 -- this scenario, you can use 'readChanOnException'.
 readChan :: OutChan a -> IO a
 {-# INLINE readChan #-}
-readChan = readChanOnExceptionUnmasked id
+readChan = \oc-> startReadChan oc >>= readSegIxUnmasked id
 
 -- | Like 'readChan' but allows recovery of the queue element which would have
 -- been read, in the case that an async exception is raised during the read. To
@@ -330,8 +332,10 @@ readChan = readChanOnExceptionUnmasked id
 -- the passed @IO a@ is the only way to access the element.
 readChanOnException :: OutChan a -> (IO a -> IO ()) -> IO a
 {-# INLINE readChanOnException #-}
-readChanOnException c h = mask_ $ 
-    readChanOnExceptionUnmasked (\io-> io `onException` (h io)) c
+readChanOnException oc h = mask_ (
+    startReadChan oc >>= 
+      readSegIxUnmasked (\io-> io `onException` (h io))
+    )
 
 
 -- increments counter, finds stream segment of corresponding cell (updating the
