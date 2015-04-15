@@ -204,33 +204,33 @@ benchmark multi
   build-depends: async
 
 
-flag dev
-  default: False
-  manual: True
+-- flag dev
+--   default: False
+--   manual: True
 
 -- for profiling, checking out core, etc
-executable dev-example
-  -- for n in `find dist/build/dev-example/dev-example-tmp -name '*dump-simpl'`; do cp $n "core-example/$(basename $n).$(git rev-parse --abbrev-ref HEAD)"; done
-  if !flag(dev)
-    buildable: False
-  else
-    build-depends:       
-        base
-      , stm
-      , unagi-chan
-
-  ghc-options: -ddump-to-file -ddump-simpl -dsuppress-module-prefixes -dsuppress-uniques -ddump-core-stats -ddump-inlinings
-  ghc-options: -O2  -rtsopts  
-  
-  -- Either do threaded for eventlogging and simple timing...
-  --ghc-options: -threaded -with-rtsopts=-N2
-  --ghc-options: -eventlog
-  -- ...or do non-threaded runtime
-  ghc-prof-options: -fprof-auto
-  --Relevant profiling RTS settings:  -xt
-  -- TODO also check out +RTS -A10m, and look at output of -sstderr
-
-  hs-source-dirs: core-example
-  main-is: Main.hs
-  default-language:    Haskell2010
-
+-- executable dev-example
+--  -- for n in `find dist/build/dev-example/dev-example-tmp -name '*dump-simpl'`; do cp $n "core-example/$(basename $n).$(git rev-parse --abbrev-ref HEAD)"; done
+--  if !flag(dev)
+--    buildable: False
+--  else
+--    build-depends:       
+--        base
+--      , stm
+--      , unagi-chan
+--
+--  ghc-options: -ddump-to-file -ddump-simpl -dsuppress-module-prefixes -dsuppress-uniques -ddump-core-stats -ddump-inlinings
+--  ghc-options: -O2  -rtsopts  
+--  
+--  -- Either do threaded for eventlogging and simple timing...
+--  ghc-options: -threaded -eventlog
+--  -- and run e.g. with +RTS -N -l
+--
+--  -- ...or do non-threaded runtime
+--  --ghc-prof-options: -fprof-auto
+--  --Relevant profiling RTS settings:  -xt
+--  -- TODO also check out +RTS -A10m, and look at output of -sstderr
+--
+--  hs-source-dirs: core-example
+--  main-is: Main.hs
+--  default-language:    Haskell2010
