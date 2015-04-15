@@ -116,7 +116,7 @@ newChanStarting !startingCellOffset = do
     savedEmptyTkt <- readArrayElem firstSeg 0
     stream <- Stream firstSeg <$> newIORef NoSegment
     let end = ChanEnd segSource 
-                  <$> newCounter (startingCellOffset - 1)
+                  <$> newCounter startingCellOffset
                   <*> newIORef (StreamHead startingCellOffset stream)
     liftA2 (,) (InChan savedEmptyTkt <$> end) (OutChan <$> end)
 

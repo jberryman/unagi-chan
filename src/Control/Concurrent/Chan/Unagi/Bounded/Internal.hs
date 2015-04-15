@@ -144,7 +144,7 @@ newChanStarting !startingCellOffset !sizeDirty = do
     savedEmptyTkt <- readArrayElem firstSeg 0
     stream <- Stream firstSeg <$> newIORef Nothing
     let end = ChanEnd logBounds boundsMn1 segSource 
-                  <$> newCounter (startingCellOffset - 1)
+                  <$> newCounter startingCellOffset
                   <*> newIORef (StreamHead startingCellOffset stream)
     endR@(ChanEnd _ _ _ counterR _) <- end
     endW <- end

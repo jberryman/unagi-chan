@@ -76,7 +76,7 @@ newChanStarting !startingCellOffset = do
                              <*> undefinedNewIndexedMVar 
                              <*> newIORef NoSegment
     let end = ChanEnd
-                  <$> newCounter (startingCellOffset - 1)
+                  <$> newCounter startingCellOffset
                   <*> newIORef (StreamHead startingCellOffset stream)
     inEnd@(ChanEnd _ inHeadRef) <- end
     finalizee <- newIORef True
@@ -271,8 +271,8 @@ streamChan period (OutChan _ (ChanEnd counter streamHead)) = do
     (StreamHead offsetInitial strInitial) <- readIORef streamHead
     -- Make sure the read above occurs before our readCounter:
     loadLoadBarrier
-    -- Linearizable as the first unread element; N.B. (+1):
-    !ix0 <- (+1) <$> readCounter counter
+    -- Linearizable as the first unread element
+    !ix0 <- readCounter counter
 
     -- Adapted from moveToNextCell, given a stream segment location `str0` and
     -- its offset, `offset0`, this navigates to the UT.Stream segment holding `ix`

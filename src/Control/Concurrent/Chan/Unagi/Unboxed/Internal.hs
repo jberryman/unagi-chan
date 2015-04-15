@@ -247,7 +247,7 @@ newChanStarting !startingCellOffset = do
     (sigArr0,eArr0) <- segSource
     stream <- Stream sigArr0 eArr0 <$> newIndexedMVar <*> newIORef NoSegment
     let end = ChanEnd
-                  <$> newCounter (startingCellOffset - 1)
+                  <$> newCounter startingCellOffset
                   <*> newIORef (StreamHead startingCellOffset stream)
     liftA2 (,) (InChan <$> end) (OutChan <$> end)
 

@@ -37,7 +37,7 @@ counterSane = do
     unless (n == 1337) $ error "newCounter magnificently broken"
     n2 <- incrCounter 1 cntr
     n2' <- readCounter cntr
-    unless (n2 == 1338 && n2' == 1338) $ error "incrCounter magnificently broken"
+    unless (n2 == 1337 && n2' == 1338) $ error "incrCounter magnificently broken"
 
 cHUNK_SIZE, maxInt, minInt :: Int
 cHUNK_SIZE = 32 -- MUST REMAIN POWER OF TWO for now
@@ -56,7 +56,7 @@ testCounterOverflow = do
             in if xmy == x `mod` y
                     then xmy
                     else error "Our bitwise mod isn't working the way we expect in testCounterOverflow"
-    cntr <- newCounter (maxInt - (cHUNK_SIZE `div` 2)) 
+    cntr <- newCounter (maxInt - (cHUNK_SIZE `div` 2) + 1) 
     spanningCntr <- replicateM cHUNK_SIZE (incrCounter 1 cntr)
     -- make sure our test is working
     if all (>0) spanningCntr || all (<0) spanningCntr
@@ -79,12 +79,13 @@ testCounterOverflow = do
 
     -- (We don't use this property)
     cntr2 <- newCounter maxInt
-    mbnd <- incrCounter 1 cntr2
-    unless (mbnd == minInt) $ 
+    _ <- incrCounter 1 cntr2
+    mnbnd <- readCounter cntr2
+    unless (mnbnd == minInt) $ 
         error $ "Incrementing counter at maxbound didn't yield minBound"
 
     -- (3) test subtraction across boundary: count - newFirstIndex, for window spanning boundary.
-    cntr3 <- newCounter (maxInt - 1)
+    cntr3 <- newCounter maxInt
     let ls = take 30 $ iterate (+1) $ maxInt - 10
     cs <- mapM (\x-> fmap (subtract x) $ incrCounter 1 cntr3) ls
     unless (cs == replicate 30 10) $ 

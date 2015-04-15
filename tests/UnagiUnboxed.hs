@@ -273,7 +273,7 @@ checkDeadlocksReaderUnagi times = do
          
          oCnt <- readCounter $ (\(UI.OutChan(UI.ChanEnd cntr _))-> cntr) o
          iCnt <- readCounter $ (\(UI.InChan (UI.ChanEnd cntr _))-> cntr) i
-         unless (iCnt == numPreloaded + 1) $ 
+         unless (iCnt == numPreloaded + 2) $ 
             error "The InChan counter doesn't match what we'd expect from numPreloaded!"
 
          case finalRead of
@@ -286,17 +286,17 @@ checkDeadlocksReaderUnagi times = do
               --
               -- Rare. Reader was killed after reading all pre-loaded messages
               -- but before starting what would be the blocking read:
-              1 | oCnt == numPreloaded -> putStr "X" >> run n normalRetries (numRace + 1)
+              1 | oCnt == numPreloaded+1 -> putStr "X" >> run n normalRetries (numRace + 1)
                 | otherwise -> error $ "Having read final 1, "++
-                                       "Expecting a counter value of "++(show numPreloaded)++
+                                       "Expecting a counter value of "++(show $ numPreloaded+1)++
                                        " but got: "++(show oCnt)
               2 -> do when usingReadChanOnException $ do
                         shouldBe1 <- join $ takeMVar saved
                         unless (shouldBe1 == 1) $
                           error "The handler for our readChanOnException should only have returned 1"
-                      unless (oCnt == numPreloaded + 1) $
+                      unless (oCnt == numPreloaded + 2) $
                         error $ "Having read final 2, "++
-                                "Expecting a counter value of "++(show $ numPreloaded+1)++
+                                "Expecting a counter value of "++(show $ numPreloaded+2)++
                                 " but got: "++(show oCnt)
                       putStr "+" >> run n (normalRetries + 1) numRace
 

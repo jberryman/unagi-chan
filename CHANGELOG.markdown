@@ -37,3 +37,4 @@
 ### 0.4.0.0
 
 - `tryReadChan` now returns an `(Element a, IO a)` tuple, where the `snd` is a blocking read action 
+- depend atomic-primops >= 0.8

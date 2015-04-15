@@ -11,7 +11,7 @@ module Data.Atomics.Counter.Fat (
 import Data.Primitive.MachDeps(sIZEOF_INT)
 import Control.Monad.Primitive(RealWorld)
 import Data.Primitive.ByteArray
-import Data.Atomics(fetchAddByteArrayInt)
+import Data.Atomics(fetchAddIntArray)
 import Control.Exception(assert)
 
 newtype AtomicCounter = AtomicCounter (MutableByteArray RealWorld)
@@ -34,7 +34,7 @@ newCounter n = do
 incrCounter :: Int -> AtomicCounter -> IO Int
 {-# INLINE incrCounter #-}
 incrCounter incr (AtomicCounter arr) =
-    fetchAddByteArrayInt arr 0 incr
+    fetchAddIntArray arr 0 incr
 
 readCounter :: AtomicCounter -> IO Int
 {-# INLINE readCounter #-}
