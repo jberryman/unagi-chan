@@ -20,14 +20,17 @@ import UnagiNoBlockingUnboxed
 -- Other
 import Atomics
 import IndexedMVar
+import Control.Concurrent.Chan.Unagi.Internal(assertionCanary)
 
 main :: IO ()
 main = do 
     -- Make sure testing environment is sane:
     assertionsWorking <- try $ assert False $ return ()
+    assertionsWorkingInLib <- assertionCanary
     case assertionsWorking of
-         Left (AssertionFailed _) -> putStrLn "Assertions: On"
-         _                        -> error "Assertions aren't working"
+         Left (AssertionFailed _)
+           | assertionsWorkingInLib -> putStrLn "Assertions: On"
+         _  -> error "Assertions aren't working"
 
     procs <- getNumCapabilities
     if procs < 2 

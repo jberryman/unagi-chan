@@ -10,6 +10,8 @@ module Control.Concurrent.Chan.Unagi.Internal
     , dupChan, tryReadChan
     -- For Unagi.NoBlocking:
     , moveToNextCell, waitingAdvanceStream, newSegmentSource
+    -- sanity tests:
+    , assertionCanary
     )
     where
 
@@ -361,3 +363,15 @@ newSegmentSource cell_empty = do
 --   Readers blocked indefinitely should eventually raise a
 --   BlockedIndefinitelyOnMVar.
 -- ----------
+
+
+-- This could go anywhere, and lets us ensure that assertions are turned on
+-- when running test suite.
+assertionCanary :: IO Bool
+assertionCanary = do
+    assertionsWorking <- try $ assert False $ return ()
+    return $
+      case assertionsWorking of
+           Left (AssertionFailed _) -> True
+           _                        -> False
+
