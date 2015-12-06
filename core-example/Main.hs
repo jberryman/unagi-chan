@@ -15,9 +15,9 @@ import qualified Control.Concurrent.STM.TQueue as S
 import Control.Concurrent.STM
 
 import Debug.Trace
+import GHC.Conc (labelThread)
 
 -- This is a copy of the "async 100 writers 100 readers" from chan-benchmarks
- {-
 main = do 
     (nm:other) <- getArgs
     let n = 1000000
@@ -27,10 +27,10 @@ main = do
     putStrLn $ "Running with "++show r++" readers, and "++ show w++" writers."
     case nm of
          "unagi" -> runU w r n
-         "chan" -> runC w r n
-         "stm"  -> runS w r n
--}
+         -- "chan" -> runC w r n
+         -- "stm"  -> runS w r n
 
+{-
 main = do
     [n] <- getArgs
     runU (read n)
@@ -46,6 +46,7 @@ runU n = do
   replicateM_ 1000 $ do
     replicateM_ n1000 $ U.writeChan i ()
     replicateM_ n1000 $ U.readChan o
+-}
 {-
 runUU :: Int -> IO ()
 runUU n = do
@@ -120,7 +121,6 @@ runUNUStream n = do
         
   writeAndEat (1000::Int) oStream
 
-{-
 runU :: Int -> Int -> Int -> IO ()
 runU writers readers n = do
   let nNice = n - rem n (lcm writers readers)
@@ -129,16 +129,34 @@ runU writers readers n = do
   vs <- replicateM readers newEmptyMVar
   (i,o) <- U.newChan
   let doRead = replicateM_ perReader $ theRead
-      theRead = U.readChan o
       doWrite = replicateM_ perWriter $ theWrite
-      theWrite = U.writeChan i (1 :: Int)
-  mapM_ (\v-> forkIO (traceEventIO "READER START" >> doRead >> putMVar v ())) vs
+
+      -- Event logging is much slower than our queue reads and writes (as we'd
+      -- expect!) so this isn't useful:
+      theRead = do
+        -- traceEventIO "START theRead"
+        U.readChan o
+        -- traceEventIO "STOP theRead"
+      theWrite = do
+        -- traceEventIO "START theWrite"
+        U.writeChan i (1 :: Int)
+        -- traceEventIO "STOP theWrite"
+
+      labelMe nm nth = myThreadId >>= (`labelThread` (nm++show nth))
+  mapM_ (\(v,nth)-> forkIO (do labelMe "R" nth
+                               traceEventIO "READER START" 
+                               doRead 
+                               putMVar v ())) $ zip vs [1..]
 
   wWaits <- replicateM writers newEmptyMVar
-  mapM_ (\v-> forkIO $ (takeMVar v >> traceEventIO "WRITER START" >> doWrite)) wWaits
+  mapM_ (\(v,nth)-> forkIO (do labelMe "W"  nth
+                               takeMVar v 
+                               traceEventIO "WRITER START" 
+                               doWrite)) $ zip wWaits [1..]
   mapM_ (\v-> putMVar v ()) wWaits
 
   mapM_ takeMVar vs -- await readers
+{-
 
 -- ------------------------------------------------
 -- FOR COMPARISON:
