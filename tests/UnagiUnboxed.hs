@@ -12,7 +12,7 @@ import qualified Data.Primitive as P
 import Data.IORef
 
 import Data.Int(Int8,Int16,Int32,Int64)
-import Data.Word(Word,Word8,Word16,Word32,Word64)
+import Data.Word
 import Data.Maybe
 import Data.Typeable
 
@@ -20,6 +20,8 @@ import Control.Concurrent(forkIO,threadDelay)
 import Control.Concurrent.MVar
 import Control.Exception
 import Data.Atomics.Counter.Fat
+
+import Prelude
 
 unagiUnboxedMain :: IO ()
 unagiUnboxedMain = do

@@ -72,7 +72,7 @@ import GHC.Exts(inline)
 -- For instances:
 import Data.Typeable(Typeable)
 import Data.Int(Int8,Int16,Int32,Int64)
-import Data.Word(Word,Word8,Word16,Word32,Word64)
+import Data.Word
 
 import Utilities
 import Control.Concurrent.Chan.Unagi.Constants
