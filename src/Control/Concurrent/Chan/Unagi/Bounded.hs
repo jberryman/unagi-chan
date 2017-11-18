@@ -22,6 +22,7 @@ module Control.Concurrent.Chan.Unagi.Bounded
     , tryReadChan
     , Element(..)
     , getChanContents
+    , estimatedLength
     -- ** Writing
     , writeChan
     , tryWriteChan

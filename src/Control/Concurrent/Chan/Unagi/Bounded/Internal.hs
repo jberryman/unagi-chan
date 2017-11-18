@@ -6,6 +6,7 @@ module Control.Concurrent.Chan.Unagi.Bounded.Internal
     , newChanStarting, writeChan, readChan, readChanOnException
     , tryWriteChan, tryReadChan
     , dupChan
+    , estimatedLength
     )
     where
 
@@ -235,16 +236,25 @@ writeChanWithBlocking canBlock (InChan _ savedEmptyTkt ce) a = mask_ $ do
 -- be.
 tryWriteChan :: InChan a -> a -> IO Bool
 {-# INLINE tryWriteChan #-}
-tryWriteChan c@(InChan readCounterReader _ (ChanEnd _ boundsMn1 _ counter _)) = \a-> do
+tryWriteChan c@(InChan _ _ (ChanEnd _ boundsMn1 _ _ _)) = \a-> do
     -- Similar caveats w/r/t counter overflow correctness as elsewhere apply
     -- here: where this would lap and give incorrect results we have already
     -- died with OOM:
-    ixR <- readCounterReader
-    ixW <- readCounter counter
-    if ixW - ixR > boundsMn1 
+    len <- estimatedLength c
+    if len > boundsMn1 
         then return False
         else writeChanWithBlocking False c a >> return True
 
+-- | Return the estimated length of a bounded queue
+--
+-- The more concurrent writes and reads that are happening, the more inaccurate
+-- the estimate of the chan's size is likely to be.
+estimatedLength :: InChan a -> IO Int
+{-# INLINE estimatedLength #-}
+estimatedLength (InChan readCounterReader _ (ChanEnd _ _ _ counter _)) = do
+    ixR <- readCounterReader
+    ixW <- readCounter counter
+    return $ ixW - ixR
 
 -- The core of our 'read' operations, with exception handler:
 readSegIxUnmasked :: (IO a -> IO a) -> (StreamSegment a, Int) -> IO a
