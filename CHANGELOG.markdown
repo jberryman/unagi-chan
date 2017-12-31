@@ -38,3 +38,7 @@
 
 - `tryReadChan` now returns an `(Element a, IO a)` tuple, where the `snd` is a blocking read action 
 - depend atomic-primops >= 0.8
+
+### 0.4.1.0
+
+- add non-atomic `estimatedLength`, thanks to danclien
