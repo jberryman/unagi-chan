@@ -12,7 +12,7 @@ description:
     .
     We export several variations of our design; some support additional
     functionality while others try for lower latency by removing features or
-    making them more restrictive (e.g. in the @Unboxed@ variants). 
+    making them more restrictive (e.g. in the @Unboxed@ variants).
     .
     - @Unagi@: a general-purpose near drop-in replacement for @Chan@.
     .
@@ -42,7 +42,7 @@ description:
     .
     <<http://i.imgur.com/J5rLUFn.png>>
     .
-    
+
 license:             BSD3
 license-file:        LICENSE
 author:              Brandon Simmons
@@ -55,7 +55,7 @@ cabal-version:       >=1.10
 --cabal-version:       >=1.18
 extra-source-files: CHANGELOG.markdown
 
-source-repository head   
+source-repository head
     type:     git
     location: https://github.com/jberryman/unagi-chan.git
     branch:   master
@@ -81,10 +81,10 @@ library
   ghc-options:        -Wall -funbox-strict-fields
   build-depends:       base < 5
                      , atomic-primops >= 0.8
-                     , primitive>=0.5.3
+                     , primitive>= 0.6.4.0
                      , ghc-prim
   default-language:    Haskell2010
-  
+
   if !arch(i386) && !arch(x86_64)
     cpp-options: -DNOT_x86
   -- TODO: more complete list of 64-bit archs:
@@ -94,7 +94,7 @@ library
   -- tryReadMVar is only available and non-broken on ghc >= 7.8.3
   if impl(ghc >= 7.8.3)
     cpp-options: -DTRYREADMVAR
-  
+
 -- TODO
 --   For v0,4:
 --   - More benchmarks, and test code we can analyze with ghc-events-analyze.
@@ -122,12 +122,12 @@ library
 test-suite test
   type: exitcode-stdio-1.0
   ghc-options: -Wall -funbox-strict-fields
-  ghc-options: -O2  -rtsopts  -threaded 
+  ghc-options: -O2  -rtsopts  -threaded
   -- NOTE: configure --enable-profiling overrides this:
   ghc-options: -with-rtsopts=-N
   ghc-options: -fno-ignore-asserts
   -- for some hacks for Addr:
-  ghc-options: -fno-warn-orphans 
+  ghc-options: -fno-warn-orphans
   ghc-options: -fno-warn-missing-methods
   -- I guess we need to put 'src' here to get access to Internal modules
   hs-source-dirs: tests, src
@@ -150,13 +150,13 @@ test-suite test
                      , containers
                      , ghc-prim
   default-language:    Haskell2010
-  
+
   -- These have to be copied from 'library' section too!
   if !arch(i386) && !arch(x86_64)
     cpp-options: -DNOT_x86
   if arch(x86_64)
     cpp-options: -DIS_64_BIT
- 
+
   if impl(ghc >= 7.8.3)
     cpp-options: -DTRYREADMVAR
 
@@ -214,14 +214,14 @@ benchmark multi
 --  if !flag(dev)
 --    buildable: False
 --  else
---    build-depends:       
+--    build-depends:
 --        base
 --      , stm
 --      , unagi-chan
 --
 --  ghc-options: -ddump-to-file -ddump-simpl -dsuppress-module-prefixes -dsuppress-uniques -ddump-core-stats -ddump-inlinings
---  ghc-options: -O2  -rtsopts  
---  
+--  ghc-options: -O2  -rtsopts
+--
 --  -- Either do threaded for eventlogging and simple timing...
 --  ghc-options: -threaded -eventlog
 --  -- and run e.g. with +RTS -N -l

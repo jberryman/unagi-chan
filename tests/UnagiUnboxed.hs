@@ -9,6 +9,7 @@ import Control.Concurrent.Chan.Unagi.Unboxed
 import qualified Control.Concurrent.Chan.Unagi.Unboxed.Internal as UI
 import Control.Monad
 import qualified Data.Primitive as P
+import Data.Primitive.Ptr
 import Data.IORef
 
 import Data.Int(Int8,Int16,Int32,Int64)
@@ -29,7 +30,7 @@ unagiUnboxedMain = do
     putStrLn "Testing Unagi.Unboxed details:"
     -- ------
     putStr "Smoke test at different starting offsets, spanning overflow... "
-    mapM_ smoke $ [ (maxBound - UI.sEGMENT_LENGTH - 1) .. maxBound] 
+    mapM_ smoke $ [ (maxBound - UI.sEGMENT_LENGTH - 1) .. maxBound]
                   ++ [minBound .. (minBound + UI.sEGMENT_LENGTH + 1)]
     putStrLn "OK"
     -- ------
@@ -56,7 +57,7 @@ unagiUnboxedMain = do
 
 smoke :: Int -> IO ()
 smoke n = do
-    smoke1 n 
+    smoke1 n
     smoke2 n
     -- test each of UnagiPrim
     applyToAllPrim smokeManyElement
@@ -79,13 +80,11 @@ applyToAllPrim f = do
     f (minBound :: Word16)
     f (minBound :: Word32)
     f (minBound :: Word64)
-    f (P.nullAddr `P.plusAddr` 1024 :: P.Addr)
+    f (nullPtr `advancePtr` 1024 :: (Ptr Word))
 
 -- TODO Maybe refactor & get rid of these
-instance Show P.Addr where
-    show _ = "<addr>"
 
-instance Num P.Addr where
+instance Num (Ptr a) where
 
 instance Num Char where
 
@@ -145,14 +144,14 @@ segSourceMagicSanity _ =
 -- Make sure we get no tearing of adjacent word-size or smaller (as determined
 -- by atomicUnicorn instantiation) values, making sure we cross a cache-line.
 atomicUnicornAtomicicity :: forall e. (Num e, Typeable e, Show e, UnagiPrim e)=> e -> IO ()
-atomicUnicornAtomicicity _e = 
+atomicUnicornAtomicicity _e =
   when (isJust  (atomicUnicorn :: Maybe e)) $ do
     (_,eArr) <- UI.segSource :: IO (UI.SignalIntArray, UI.ElementArray e)
     let iters = (64 `quot` P.sizeOf _e) + 1
-    when (iters >= UI.sEGMENT_LENGTH) $ 
+    when (iters >= UI.sEGMENT_LENGTH) $
       error "Our sEGMENT_LENGTH is smaller than expected; please fix test"
     -- just skip Addr for now TODO:
-    unless (  isJust (cast _e :: Maybe P.Addr)
+    unless (  isJust (cast _e :: Maybe (Ptr Word))
            || isJust (cast _e :: Maybe Char)) $
       forM_ [0.. iters] $ \i0 -> do
         let i1 = i0+1
@@ -214,7 +213,7 @@ correctInitialWrites startN = do
                 error $ "Expected last write at index "++(show $ last writes)++" of same value but got "++(show cell)
             -- check pre-allocation:
             n2 <- readIORef next2
-            case n2 of 
+            case n2 of
                 (UI.Next (UI.Stream _ _ _ next3)) -> do
                     n3 <- readIORef next3
                     case n3 of
@@ -262,7 +261,7 @@ checkDeadlocksReaderUnagi times = do
          rStart <- newEmptyMVar
          saved <- newEmptyMVar -- for holding potential saved (IO a) from blocked readChanOnException
          rid <- forkIO $ (\rd-> putMVar rStart () >> (forever $ void $ rd o)) $
-                    if usingReadChanOnException 
+                    if usingReadChanOnException
                         then flip readChanOnException ( putMVar saved )
                         else readChan
          takeMVar rStart >> threadDelay 1
@@ -272,10 +271,10 @@ checkDeadlocksReaderUnagi times = do
          writeChan i 1 `onException` ( putStrLn "Exception from first writeChan!")
          writeChan i 2 `onException` ( putStrLn "Exception from second writeChan!")
          finalRead <- readChan o `onException` ( putStrLn "Exception from final readChan!")
-         
+
          oCnt <- readCounter $ (\(UI.OutChan(UI.ChanEnd cntr _))-> cntr) o
          iCnt <- readCounter $ (\(UI.InChan (UI.ChanEnd cntr _))-> cntr) i
-         unless (iCnt == numPreloaded + 2) $ 
+         unless (iCnt == numPreloaded + 2) $
             error "The InChan counter doesn't match what we'd expect from numPreloaded!"
 
          case finalRead of

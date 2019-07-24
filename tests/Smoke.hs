@@ -172,8 +172,7 @@ testContention (newChan,writeChan,readChan,_) writers readers n = do
   mapM_ (forkCatching False "testContention writeChan i " . mapM_ (writeChan i)) groups
 
   ns <- replicateM nNice (C.readChan out)
-  isEmpty <- C.isEmptyChan out
-  if sort ns == [1..nNice] && isEmpty
+  if sort ns == [1..nNice]
       then let d = interleaving ns
             in if d < 0.7 -- arbitrary
                  then putStrLn $ "OK, BUT WARNING: low interleaving of threads: "++(show $ d)

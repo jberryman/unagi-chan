@@ -23,7 +23,7 @@ module Control.Concurrent.Chan.Unagi.Unboxed.Internal
 -- TODO integration w/ ByteString
 --       - we'd need to make IndexedMVar () and always write to ByteString
 --       - we'd need to switch to Storable probably.
---       - exporting slices of elements as ByteString 
+--       - exporting slices of elements as ByteString
 --         - lazy bytestring would be easiest because of segment boundaries
 --         - might be tricky to do blocking checking efficiently
 --       - writing bytearrays
@@ -65,6 +65,7 @@ import Control.Monad.Primitive(RealWorld)
 import Data.Atomics.Counter.Fat
 import Data.Atomics
 import qualified Data.Primitive as P
+import Data.Primitive.Ptr
 import Control.Monad
 import Control.Applicative
 import Data.Bits
@@ -98,9 +99,9 @@ instance Eq (OutChan a) where
 
 -- InChan & OutChan are mostly identical, sharing a stream, but with
 -- independent counters
-data ChanEnd a = 
+data ChanEnd a =
    ChanEnd  -- Both Chan ends must start with the same counter value.
-            !AtomicCounter 
+            !AtomicCounter
             -- the stream head; this must never point to a segment whose offset
             -- is greater than the counter value
             !(IORef (StreamHead a))
@@ -129,7 +130,7 @@ type SignalIntArray = P.MutableByteArray RealWorld
 --     Written
 --     Blocking (only when dupChan used)
 --   During Write:
---     Empty   -> Written 
+--     Empty   -> Written
 --     Blocking
 {-
 data Cell a = Empty    -- 0
@@ -150,19 +151,19 @@ segSource :: forall a. (UnagiPrim a)=> IO (SignalIntArray, ElementArray a) --Sco
 {-# INLINE segSource #-}
 segSource = do
     -- A largish pinned array seems like it would be the best choice here.
-    sigArr <- P.newAlignedPinnedByteArray 
+    sigArr <- P.newAlignedPinnedByteArray
                 (P.sizeOf    cellEmpty `unsafeShiftL` lOG_SEGMENT_LENGTH) -- times sEGMENT_LENGTH
                 (P.alignment cellEmpty)
     -- NOTE: we need these to be aligned to (some multiple of) Word boundaries
     -- for magic trick to be correct, and for assumptions about atomicity of
     -- loads/stores to hold!
-    eArr <- P.newAlignedPinnedByteArray 
+    eArr <- P.newAlignedPinnedByteArray
                 (P.sizeOf (undefined :: a) `unsafeShiftL` lOG_SEGMENT_LENGTH)
                 (P.alignment (undefined :: a))
     P.setByteArray sigArr 0 sEGMENT_LENGTH cellEmpty
     -- If no atomicUnicorn then we always check in at sigArr, so no need to
     -- initialize eArr:
-    maybe (return ()) 
+    maybe (return ())
         (P.setByteArray eArr 0 sEGMENT_LENGTH) (atomicUnicorn :: Maybe a)
     return (sigArr, ElementArray eArr)
     -- NOTE: We always CAS this into place which provides write barrier, such
@@ -205,8 +206,8 @@ instance UnagiPrim Word16 where
     atomicUnicorn = Just 0xDADA
 instance UnagiPrim Word32 where
     atomicUnicorn = Just 0xDADADADA
-instance UnagiPrim P.Addr where
-    atomicUnicorn = Just P.nullAddr
+instance UnagiPrim (Ptr a) where
+    atomicUnicorn = Just nullPtr
 -- These should conservatively be expected to be atomic only on 64-bit
 -- machines:
 instance UnagiPrim Int64 where
@@ -225,12 +226,12 @@ instance UnagiPrim Double where
 -- NOTE: we tried combining the SignalIntArray and ElementArray into a single
 -- bytearray in the unagi-unboxed-combined-bytearray branch but saw no
 -- significant improvement.
-data Stream a = 
+data Stream a =
     Stream !SignalIntArray
            !(ElementArray a)
            -- For coordinating blocking between reader/writer; NOTE [1]
            (IndexedMVar a) -- N.B. must remain non-strict for NoBlocking.Unboxed
-           -- The next segment in the stream; NOTE [2] 
+           -- The next segment in the stream; NOTE [2]
            !(IORef (NextSegment a))
   -- [1] An important property: we can switch out this implementation as long
   -- as it utilizes a fresh MVar for each reader/writer pair.
@@ -267,7 +268,7 @@ dupChan (InChan (ChanEnd counter streamHead)) = do
 -- | Write a value to the channel.
 writeChan :: UnagiPrim a=> InChan a -> a -> IO ()
 {-# INLINE writeChan #-}
-writeChan (InChan ce) = \a-> mask_ $ do 
+writeChan (InChan ce) = \a-> mask_ $ do
     (segIx, (Stream sigArr eArr mvarIndexed next), maybeUpdateStreamHead) <- moveToNextCell ce
     maybeUpdateStreamHead
     -- NOTE!: must write element before signaling with CAS:
@@ -298,7 +299,7 @@ readSegIxUnmasked h =
     maybeUpdateStreamHead
     let readBlocking = inline h $ readMVarIx mvarIndexed segIx    -- NOTE [1]
         readElem = readElementArray eArr segIx
-        slowRead = do 
+        slowRead = do
            -- Assume probably blocking (Note: casByteArrayInt is a full barrier)
            actuallyWas <- casByteArrayInt sigArr segIx cellEmpty cellBlocking -- NOTE [2]
            case actuallyWas of
@@ -315,7 +316,7 @@ readSegIxUnmasked h =
     case atomicUnicorn of
          Just magic -> do
             el <- readElem
-            if (el /= magic) 
+            if (el /= magic)
               -- We know `el` was atomically written:
               then return el
               else slowRead
@@ -345,7 +346,7 @@ readSegIxUnmasked h =
 -- If you're using this function exclusively you might find the implementation
 -- in "Control.Concurrent.Chan.Unagi.NoBlocking.Unboxed" is faster.
 --
--- /Note re. exceptions/: When an async exception is raised during a @tryReadChan@ 
+-- /Note re. exceptions/: When an async exception is raised during a @tryReadChan@
 -- the message that the read would have returned is likely to be lost, just as
 -- it would be when raised directly after this function returns.
 tryReadChan :: UnagiPrim a=> OutChan a -> IO (UT.Element a, IO a)
@@ -355,19 +356,19 @@ tryReadChan (OutChan ce) = do -- no masking needed
     segStuff@(segIx, (Stream sigArr eArr mvarIndexed _), maybeUpdateStreamHead) <- moveToNextCell ce
     maybeUpdateStreamHead
     let readElem = readElementArray eArr segIx
-        slowRead = do 
+        slowRead = do
            sig <- P.readByteArray sigArr segIx
            case (sig :: Int) of
                 0 {- Empty -} -> return Nothing
                 1 {- Written -} -> loadLoadBarrier  >>  Just <$> readElem
                 2 {- Blocking -} -> tryReadMVarIx mvarIndexed segIx
                 _ -> error "Invalid signal seen in tryReadChan!"
-    return ( 
+    return (
         UT.Element $
           case atomicUnicorn of
              Just magic -> do
                 el <- readElem
-                if (el /= magic) 
+                if (el /= magic)
                   then return $ Just el
                   else slowRead
              Nothing -> slowRead
@@ -378,7 +379,7 @@ tryReadChan (OutChan ce) = do -- no masking needed
 
 -- | Read an element from the chan, blocking if the chan is empty.
 --
--- /Note re. exceptions/: When an async exception is raised during a @readChan@ 
+-- /Note re. exceptions/: When an async exception is raised during a @readChan@
 -- the message that the read would have returned is likely to be lost, even when
 -- the read is known to be blocked on an empty queue. If you need to handle
 -- this scenario, you can use 'readChanOnException'.
@@ -396,7 +397,7 @@ readChan = \(OutChan ce)-> moveToNextCell ce >>= readSegIxUnmasked id
 -- the passed @IO a@ is the only way to access the element.
 readChanOnException :: UnagiPrim a=> OutChan a -> (IO a -> IO ()) -> IO a
 {-# INLINE readChanOnException #-}
-readChanOnException (OutChan ce) h = mask_ $ 
+readChanOnException (OutChan ce) h = mask_ $
     moveToNextCell ce >>=
       readSegIxUnmasked (\io-> io `onException` (h io))
 
@@ -410,7 +411,7 @@ moveToNextCell :: UnagiPrim a=> ChanEnd a -> IO (Int, Stream a, IO ())
 moveToNextCell (ChanEnd counter streamHead) = do
     (StreamHead offset0 str0) <- readIORef streamHead
     ix <- incrCounter 1 counter
-    let (segsAway, segIx) = assert ((ix - offset0) >= 0) $ 
+    let (segsAway, segIx) = assert ((ix - offset0) >= 0) $
                  divMod_sEGMENT_LENGTH $! (ix - offset0)
               -- (ix - offset0) `quotRem` sEGMENT_LENGTH
         {-# INLINE go #-}
@@ -424,7 +425,7 @@ moveToNextCell (ChanEnd counter streamHead) = do
     -- writer.
     let !maybeUpdateStreamHead = do
           when (segsAway > 0) $ do
-            let !offsetN = 
+            let !offsetN =
                   offset0 + (segsAway `unsafeShiftL` lOG_SEGMENT_LENGTH) --(segsAway*sEGMENT_LENGTH)
             writeIORef streamHead $ StreamHead offsetN str
           touchIORef streamHead -- NOTE [1]
@@ -442,12 +443,12 @@ waitingAdvanceStream nextSegRef = go where
   go !wait = assert (wait >= 0) $ do
     tk <- readForCAS nextSegRef
     case peekTicket tk of
-         NoSegment 
+         NoSegment
            | wait > 0 -> go (wait - 1)
              -- Create a potential next segment and try to insert it:
-           | otherwise -> do 
-               potentialStrNext <- uncurry Stream 
-                                            <$> segSource 
+           | otherwise -> do
+               potentialStrNext <- uncurry Stream
+                                            <$> segSource
                                             <*> newIndexedMVar
                                             <*> newIORef NoSegment
                (_,tkDone) <- casIORef nextSegRef tk (Next potentialStrNext)
