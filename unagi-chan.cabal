@@ -79,7 +79,7 @@ library
                      , Data.Atomics.Counter.Fat
 
   ghc-options:        -Wall -funbox-strict-fields
-  build-depends:       base < 5
+  build-depends:       base >= 4.7 && < 5
                      , atomic-primops >= 0.8
                      , primitive>=0.5.3
                      , ghc-prim
