@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.com/jberryman/unagi-chan.svg?branch=master)](https://travis-ci.com/jberryman/unagi-chan)
+
 The library is [available on hackage](http://hackage.haskell.org/package/unagi-chan)
 and you can install it with:
 

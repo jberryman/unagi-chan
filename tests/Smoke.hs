@@ -172,8 +172,8 @@ testContention (newChan,writeChan,readChan,_) writers readers n = do
   mapM_ (forkCatching False "testContention writeChan i " . mapM_ (writeChan i)) groups
 
   ns <- replicateM nNice (C.readChan out)
-  isEmpty <- C.isEmptyChan out
-  if sort ns == [1..nNice] && isEmpty
+  assertIsEmptyChan out "Expected out to be empty, first of all..."
+  if sort ns == [1..nNice]
       then let d = interleaving ns
             in if d < 0.7 -- arbitrary
                  then putStrLn $ "OK, BUT WARNING: low interleaving of threads: "++(show $ d)
@@ -181,6 +181,14 @@ testContention (newChan,writeChan,readChan,_) writers readers n = do
       else error "What we put in isn't what we got out :("
   mapM_ (`throwTo` ThreadKilled) rIds
 
+
+-- isEmptyChan was removed at some point, which is quite annoying:
+assertIsEmptyChan :: C.Chan Int -> String -> IO ()
+assertIsEmptyChan c err = do
+  C.writeChan c 666666
+  satan <- C.readChan c
+  unless (satan == 666666) $
+    error err
 
 
 -- --------- Helpers:

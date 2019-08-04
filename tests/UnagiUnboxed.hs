@@ -1,4 +1,5 @@
 {-# LANGUAGE RankNTypes , ScopedTypeVariables , BangPatterns #-}
+{-# LANGUAGE TypeSynonymInstances, FlexibleInstances, CPP #-}
 module UnagiUnboxed (unagiUnboxedMain) where
 
 -- Unagi-chan-specific tests
@@ -22,6 +23,22 @@ import Control.Exception
 import Data.Atomics.Counter.Fat
 
 import Prelude
+
+-- primitive 0.7.0 got rid of Addr
+#if MIN_VERSION_primitive(0,7,0)
+import qualified Data.Primitive.Ptr as P
+type Addr = P.Ptr Word8
+nullAddr :: Addr
+nullAddr = P.nullPtr
+plusAddr :: Addr -> Int -> Addr
+plusAddr = P.advancePtr
+#else
+import qualified Data.Primitive (Addr, nullAddr)
+-- TODO Maybe refactor & get rid of these
+instance Show Addr where
+    show _ = "<addr>"
+#endif
+
 
 unagiUnboxedMain :: IO ()
 unagiUnboxedMain = do
@@ -79,14 +96,11 @@ applyToAllPrim f = do
     f (minBound :: Word16)
     f (minBound :: Word32)
     f (minBound :: Word64)
-    f (P.nullAddr `P.plusAddr` 1024 :: P.Addr)
+    f (nullAddr `plusAddr` 1024 :: Addr)
+
 
 -- TODO Maybe refactor & get rid of these
-instance Show P.Addr where
-    show _ = "<addr>"
-
-instance Num P.Addr where
-
+instance Num Addr where
 instance Num Char where
 
 
@@ -152,7 +166,7 @@ atomicUnicornAtomicicity _e =
     when (iters >= UI.sEGMENT_LENGTH) $ 
       error "Our sEGMENT_LENGTH is smaller than expected; please fix test"
     -- just skip Addr for now TODO:
-    unless (  isJust (cast _e :: Maybe P.Addr)
+    unless (  isJust (cast _e :: Maybe Addr)
            || isJust (cast _e :: Maybe Char)) $
       forM_ [0.. iters] $ \i0 -> do
         let i1 = i0+1

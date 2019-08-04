@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns , DeriveDataTypeable, CPP , ScopedTypeVariables #-}
+{-# LANGUAGE TypeSynonymInstances, FlexibleInstances #-}
 module Control.Concurrent.Chan.Unagi.Unboxed.Internal
 #ifdef NOT_x86
     {-# WARNING "This library is unlikely to perform well on architectures without a fetch-and-add instruction" #-}
@@ -79,6 +80,16 @@ import Control.Concurrent.Chan.Unagi.Constants
 import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Types as UT
 
 import Prelude
+
+-- primitive 0.7.0 got rid of Addr
+#if MIN_VERSION_primitive(0,7,0)
+import qualified Data.Primitive.Ptr as P
+type Addr = P.Ptr Word8
+nullAddr :: Addr
+nullAddr = P.nullPtr
+#else
+import qualified Data.Primitive (Addr, nullAddr)
+#endif
 
 -- | The write end of a channel created with 'newChan'.
 newtype InChan a = InChan (ChanEnd a)
@@ -205,8 +216,8 @@ instance UnagiPrim Word16 where
     atomicUnicorn = Just 0xDADA
 instance UnagiPrim Word32 where
     atomicUnicorn = Just 0xDADADADA
-instance UnagiPrim P.Addr where
-    atomicUnicorn = Just P.nullAddr
+instance UnagiPrim Addr where
+    atomicUnicorn = Just nullAddr
 -- These should conservatively be expected to be atomic only on 64-bit
 -- machines:
 instance UnagiPrim Int64 where
