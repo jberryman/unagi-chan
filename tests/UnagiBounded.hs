@@ -1,5 +1,6 @@
 module UnagiBounded(unagiBoundedMain) where
 
+import TestUtils
 import Control.Concurrent.Chan.Unagi.Bounded
 import qualified Control.Concurrent.Chan.Unagi.Bounded.Internal as UI
 import Control.Monad
@@ -44,11 +45,13 @@ unagiBoundedMain = do
         testBoundsBlocking (2^n)
     putStrLn "OK"
     -- ------
-    putStr "Test behavior of tryWriteChan... "
+    putStrLn "Test behavior of tryWriteChan... "
     forM_ [(1::Int),2,4,8] $ \n-> do
+        putStr (show n)
         tryWriteChanSmoke (2^n)
         tryWriteChanConcurrent (2^n)
-    putStrLn "OK"
+        putStrLn ""
+    putStrLn "  ...OK"
     -- ------
     putStrLn "Testing Unagi.Bounded components:"
     -- ------
@@ -131,7 +134,7 @@ checkDeadlocksReaderUnagiBounded :: Int -> IO ()
 checkDeadlocksReaderUnagiBounded times = do
   let run 0 normalRetries numRace = putStrLn $ "Lates: "++(show normalRetries)++", Races: "++(show numRace)
       run n normalRetries numRace
-       | (normalRetries + numRace) > (times `div` 3) = error "This test is taking too long. Please retry, and if still failing send the log to me"
+       | (normalRetries + numRace) > (times `div` 3) = error_paranoid "This test is taking too long. Please retry, and if still failing send the log to me"
        | otherwise = do
          -- we'll kill the reader with our special exception half the time,
          -- expecting that we never get our race condition on those runs:
@@ -303,6 +306,7 @@ testTryWriteChan bnds = do
     forM_ vs $ \v-> 
         takeMVar v `onException` putStrLn "A tryWriteChan seems to have blocked!"
 -}
+-- TODO did this deadlock on CI?
 tryWriteChanSmoke :: Int -> IO ()
 tryWriteChanSmoke bnds = do
     (inC,outC) <- newChan bnds
@@ -310,24 +314,29 @@ tryWriteChanSmoke bnds = do
     trues <- replicateM bnds $ tryWriteChan inC ()
     unless (and trues) $
         error "Some of the first writes failed!"
+    putStr "."
     -- but this ought to fail:
     success1 <- tryWriteChan inC () `onException` putStrLn "Our tryTakeMVar seems to have blocked instead of returning False!"
     when success1 $
         error "bnds+1 tryWriteChan should have failed!"
+    putStr "."
     -- ...until we read:
     readChan outC
     -- then this should succeed:
     success2 <- tryWriteChan inC () `onException` putStrLn "Our tryTakeMVar number 2 seems to have blocked instead of returning true!"
     unless success2 $
         error "bnds+1 tryWriteChan should have succeeded this time!"
+    putStr "."
     -- And the next should fail again.
     success3 <- tryWriteChan inC () `onException` putStrLn "Our tryTakeMVar number 3 seems to have blocked instead of returning true!"
     when success3 $
         error "bnds+2 tryWriteChan should have failed!"
+    putStr "."
     readChan outC
     success4 <- tryWriteChan inC () `onException` putStrLn "Our tryTakeMVar number 4 seems to have blocked instead of returning true!"
     unless success4 $
         error "bnds+3 tryWriteChan should have succeeded this time!"
+    putStr "."
 
 -- Now do some concurrency tests, forking readers and writers that retry until
 -- they can fill their quota
@@ -347,6 +356,7 @@ tryWriteChanConcurrent bnds = do
     -- Test with truly concurrent reader and writer:
     void $ forkIO $ writer n 0 v1
     replicateM_ n $ readChan outC
+    putStr "c"
     _failed0 <- takeMVar v1
     -- print _failed0
 
@@ -356,7 +366,9 @@ tryWriteChanConcurrent bnds = do
     void $ forkIO $ writer n 0 v2
     void $ forkIO $ replicateM_ (n*2) $ readChan outC
     _failed1 <- takeMVar v1
+    putStr "c"
     _failed2 <- takeMVar v2
+    putStr "c"
     -- print _failed1
     -- print _failed2
     return ()

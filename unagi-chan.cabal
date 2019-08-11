@@ -145,6 +145,7 @@ test-suite test
     , UnagiBounded
     , UnagiNoBlocking
     , UnagiNoBlockingUnboxed
+    , TestUtils
   build-depends:       base
                      , primitive>=0.5.3
                      , atomic-primops >= 0.8

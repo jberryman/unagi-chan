@@ -6,6 +6,7 @@ module UnagiUnboxed (unagiUnboxedMain) where
 --
 -- Forked from tests/Unagi.hs at 337600f
 
+import TestUtils
 import Control.Concurrent.Chan.Unagi.Unboxed
 import qualified Control.Concurrent.Chan.Unagi.Unboxed.Internal as UI
 import Control.Monad
@@ -262,7 +263,7 @@ checkDeadlocksReaderUnagi :: Int -> IO ()
 checkDeadlocksReaderUnagi times = do
   let run 0 normalRetries numRace = putStrLn $ "Lates: "++(show normalRetries)++", Races: "++(show numRace)
       run n normalRetries numRace
-       | (normalRetries + numRace) > (times `div` 3) = error "This test is taking too long. Please retry, and if still failing send the log to me"
+       | (normalRetries + numRace) > (times `div` 3) = error_paranoid "This test is taking too long. Please retry, and if still failing send the log to me"
        | otherwise = do
          -- we'll kill the reader with our special exception half the time,
          -- expecting that we never get our race condition on those runs:

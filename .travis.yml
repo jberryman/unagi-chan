@@ -105,7 +105,7 @@ script:
   - ${CABAL} new-build -w ${HC} ${TEST} ${BENCH} all
   # https://github.com/haskell/cabal/issues/4766 
   # - if [ "x$TEST" = "x--enable-tests" ]; then ${CABAL} new-test -w ${HC} ${TEST} ${BENCH} all; fi
-  - if [ "x$TEST" = "x--enable-tests" ]; then $(find dist-newstyle -name test -executable -type f) ; fi
+  - if [ "x$TEST" = "x--enable-tests" ]; then UNAGI_TESTING_LAX=true $(find dist-newstyle -name test -executable -type f) ; fi
 
   # cabal check
   - (cd unagi-chan-* && ${CABAL} check)
