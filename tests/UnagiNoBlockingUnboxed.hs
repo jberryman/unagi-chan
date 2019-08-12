@@ -1,6 +1,5 @@
 module UnagiNoBlockingUnboxed (unagiNoBlockingUnboxedMain) where
 
-import TestUtils
 import Control.Concurrent.Chan.Unagi.NoBlocking.Unboxed
 import qualified Control.Concurrent.Chan.Unagi.NoBlocking.Unboxed.Internal as UI
 
@@ -162,7 +161,7 @@ checkDeadlocksReaderUnagi :: Int -> IO ()
 checkDeadlocksReaderUnagi times = do
   let run 0 normalRetries numRace = putStrLn $ "Lates: "++(show normalRetries)++", Races: "++(show numRace)
       run n normalRetries numRace
-       | (normalRetries + numRace) > (times `div` 3) = error_paranoid "This test is taking too long. Please retry, and if still failing send the log to me"
+       | (normalRetries + numRace) > (times `div` 3) = error "This test is taking too long. Please retry, and if still failing send the log to me"
        | otherwise = do
          (i,o) <- UI.newChanStarting 0
          -- preload a chan with 0s

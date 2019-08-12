@@ -1,6 +1,5 @@
 module Deadlocks (deadlocksMain) where
 
-import TestUtils
 import Control.Concurrent.MVar
 import Control.Concurrent(getNumCapabilities,threadDelay,forkIO)
 import Control.Exception
@@ -135,7 +134,7 @@ checkDeadlocksReader (newChan,writeChan,readChan,_) times = do
   let run _       0 = putStrLn ""
       run retries n = do
          when (retries > (times `div` 3)) $
-            error_paranoid "This test is taking too long. Please retry, and if still failing send the log to me"
+            error "This test is taking too long. Please retry, and if still failing send the log to me"
          (i,o) <- newChan
          -- if we don't have at least three cores, then we need to write enough messages in first, before killing reader.
          maybeWid <- if procs > 4 -- NOTE 4 might mean only two real cores, so be conservative here.
@@ -191,7 +190,7 @@ checkDeadlocksWriter (newChan,writeChan,readChan,_) n = void $
 checkDeadlocksWriterBounded :: Int -> IO ()
 checkDeadlocksWriterBounded cnt = go 0 cnt where
   go lates n 
-    | lates > (cnt `div` 4) = error_paranoid "This is taking too long; we probably need a bigger bounds, sorry." 
+    | lates > (cnt `div` 4) = error "This is taking too long; we probably need a bigger bounds, sorry." 
     | otherwise = 
        when (n > 0) $ do
          (i,o) <- UB.newChan (2^(14::Int))

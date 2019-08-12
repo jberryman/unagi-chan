@@ -2,7 +2,6 @@ module Unagi (unagiMain) where
 
 -- Unagi-chan-specific tests
 
-import TestUtils
 import Control.Concurrent.Chan.Unagi
 import qualified Control.Concurrent.Chan.Unagi.Internal as UI
 import Control.Monad
@@ -138,7 +137,7 @@ checkDeadlocksReaderUnagi times = do
   let run 0 normalRetries numRace = putStrLn $ "Lates: "++(show normalRetries)++", Races: "++(show numRace)
       run n normalRetries numRace
        | (normalRetries + numRace) > (times `div` 2)  -- NOTE: Unagi now seems to have regular and many more lates than the other tests; I'm not sure why, but lowered the threshold.
-           = error_paranoid "This test is taking too long. Please retry, and if still failing send the log to me"
+           = error "This test is taking too long. Please retry, and if still failing send the log to me"
        | otherwise = do
          -- we'll kill the reader with our special exception half the time,
          -- expecting that we never get our race condition on those runs:
