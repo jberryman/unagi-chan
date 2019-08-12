@@ -88,7 +88,7 @@ type Addr = P.Ptr Word8
 nullAddr :: Addr
 nullAddr = P.nullPtr
 #else
-import qualified Data.Primitive (Addr, nullAddr)
+import Data.Primitive (Addr, nullAddr)
 #endif
 
 -- | The write end of a channel created with 'newChan'.
