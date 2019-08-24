@@ -26,6 +26,17 @@ data Next a = Next a (Stream a) -- ^ The next head element along with the tail @
 -- item. The value returned by @tryRead@ moves monotonically from @Nothing@
 -- to @Just a@ when and if an element becomes available, and is idempotent at
 -- that point.
+--
+-- So for instance:
+--
+-- @
+--    (in, out) <- newChan
+--    (el, _) <- tryReadChan out  -- READ FROM EMPTY CHAN
+--    writeChan in "msg1"
+--    writeChan in "msg2"
+--    readChan out        -- RETURNS "msg2"
+--    tryRead el          -- RETURNS "msg1" (which would otherwise be lost)
+-- @
 newtype Element a = Element { tryRead :: IO (Maybe a) }
 
 -- Instances cribbed from MaybeT, from transformers v0.4.2.0

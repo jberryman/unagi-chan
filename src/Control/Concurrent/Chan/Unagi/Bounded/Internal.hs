@@ -302,6 +302,8 @@ startReadChan (OutChan ce@(ChanEnd _ _ segSource _ _)) = do
 --
 --  - a blocking @IO@ action that returns the element when it becomes available.
 --
+-- /Note/: This is a destructive operation. See 'UT.Element' for more details.
+--
 -- /Note re. exceptions/: When an async exception is raised during a @tryReadChan@ 
 -- the message that the read would have returned is likely to be lost, just as
 -- it would be when raised directly after this function returns.

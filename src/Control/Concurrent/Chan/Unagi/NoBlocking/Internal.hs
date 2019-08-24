@@ -142,6 +142,8 @@ writeChan (InChan _ ce@(ChanEnd segSource _ _)) = \a-> mask_ $ do
 -- | Returns immediately with an @'UT.Element' a@ future, which returns one
 -- unique element when it becomes available via 'UT.tryRead'.
 --
+-- /Note/: This is a destructive operation. See 'UT.Element' for more details.
+--
 -- /Note re. exceptions/: When an async exception is raised during a @tryReadChan@ 
 -- the message that the read would have returned is likely to be lost, just as
 -- it would be when raised directly after this function returns.

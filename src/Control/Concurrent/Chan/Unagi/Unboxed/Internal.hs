@@ -340,11 +340,6 @@ readSegIxUnmasked h =
 
 
 
--- TODO we might want also a blocking `IO a` returned here, or use an opaque
--- Element type supporting blocking, since otherwise calling `tryReadChan` we
--- give up the ability to block on that element. Please open an issue if you
--- need this in the meantime. And also handling of lost elements on async
--- exceptions. And also isActive...
 
 -- | Returns immediately with:
 --
@@ -352,6 +347,8 @@ readSegIxUnmasked h =
 --  becomes available via 'UT.tryRead'.
 --
 --  - a blocking @IO@ action that returns the element when it becomes available.
+--
+-- /Note/: This is a destructive operation. See 'UT.Element' for more details.
 --
 -- If you're using this function exclusively you might find the implementation
 -- in "Control.Concurrent.Chan.Unagi.NoBlocking.Unboxed" is faster.

@@ -211,6 +211,8 @@ readSegIxUnmasked h =
 --
 --  - a blocking @IO@ action that returns the element when it becomes available.
 --
+-- /Note/: This is a destructive operation. See 'UT.Element' for more details.
+--
 -- If you're using this function exclusively you might find the implementation
 -- in "Control.Concurrent.Chan.Unagi.NoBlocking" is faster.
 --
