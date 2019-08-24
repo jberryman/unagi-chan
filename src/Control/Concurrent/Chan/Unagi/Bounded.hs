@@ -48,8 +48,8 @@ newChan :: Int -> IO (InChan a, OutChan a)
 newChan size = newChanStarting (maxBound - 10) size
     -- lets us test counter overflow in tests and normal course of operation
 
--- | Return a lazy list representing the contents of the supplied OutChan, much
--- like System.IO.hGetContents.
+-- | Return a lazy infinite list representing the contents of the supplied
+-- OutChan, much like System.IO.hGetContents.
 getChanContents :: OutChan a -> IO [a]
 getChanContents ch = unsafeInterleaveIO (do
                             x  <- unsafeInterleaveIO $ readChan ch
