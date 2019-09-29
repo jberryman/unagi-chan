@@ -2,6 +2,7 @@ module Control.Concurrent.Chan.Unagi.NoBlocking.Types where
 
 import Control.Applicative
 import Control.Monad.Fix
+import Control.Monad.Fail
 import Control.Monad
 import Data.Maybe
 
@@ -52,13 +53,15 @@ instance Alternative Element where
     (<|>) = mplus
 
 instance Monad Element where
-    fail _ = Element (return Nothing)
     return = Element . return . return
     x >>= f = Element $ do
         v <- tryRead x
         case v of
             Nothing -> return Nothing
             Just y  -> tryRead (f y)
+
+instance MonadFail Element where
+    fail _ = Element (return Nothing)
 
 instance MonadPlus Element where
     mzero = Element (return Nothing)
