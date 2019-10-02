@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 module Control.Concurrent.Chan.Unagi.NoBlocking.Types where
 
 import Control.Applicative
@@ -5,6 +6,9 @@ import Control.Monad.Fix
 import Control.Monad
 import Data.Maybe
 
+#if __GLASGOW_HASKELL__ >= 800
+import Control.Monad.Fail
+#endif
 -- Mostly here to avoid unfortunate name clash with our internal Stream type
 
 
@@ -52,13 +56,16 @@ instance Alternative Element where
     (<|>) = mplus
 
 instance Monad Element where
-    fail _ = Element (return Nothing)
     return = Element . return . return
     x >>= f = Element $ do
         v <- tryRead x
         case v of
             Nothing -> return Nothing
             Just y  -> tryRead (f y)
+#if __GLASGOW_HASKELL__ >= 800
+instance MonadFail Element where
+#endif
+    fail _ = Element (return Nothing)
 
 instance MonadPlus Element where
     mzero = Element (return Nothing)
