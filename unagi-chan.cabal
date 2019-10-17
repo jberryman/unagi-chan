@@ -1,5 +1,5 @@
 name:                unagi-chan
-version:             0.4.1.2
+version:             0.4.1.3
 
 synopsis:            Fast concurrent queues with a Chan-like API, and more
 
@@ -54,7 +54,7 @@ cabal-version:       >=1.10
 --extra-doc-files:     images/*.png
 --cabal-version:       >=1.18
 extra-source-files: CHANGELOG.markdown
-Tested-With: GHC ==7.8.4 || ==7.10.3 || ==8.0.2 || ==8.2.2 || ==8.4.4 || ==8.6.4
+Tested-With: GHC ==7.8.4 || ==7.10.3 || ==8.0.2 || ==8.2.2 || ==8.4.4 || ==8.6.4 || ==8.8.1
 
 source-repository head   
     type:     git
