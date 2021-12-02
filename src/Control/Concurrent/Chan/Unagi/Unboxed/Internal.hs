@@ -1,8 +1,8 @@
 {-# LANGUAGE BangPatterns , DeriveDataTypeable, CPP , ScopedTypeVariables #-}
 {-# LANGUAGE TypeSynonymInstances, FlexibleInstances #-}
 module Control.Concurrent.Chan.Unagi.Unboxed.Internal
-#ifdef NOT_x86
-    {-# WARNING "This library is unlikely to perform well on architectures without a fetch-and-add instruction" #-}
+#ifdef NOT_optimised
+    {-# WARNING "This library is unlikely to perform well on architectures other than i386/x64/aarch64" #-}
 #endif
     (sEGMENT_LENGTH
     , UnagiPrim(..)

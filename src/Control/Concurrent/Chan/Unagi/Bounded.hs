@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP #-}
 module Control.Concurrent.Chan.Unagi.Bounded
-#ifdef NOT_x86
-    {-# WARNING "This library is unlikely to perform well on architectures without a fetch-and-add instruction" #-}
+#ifdef NOT_optimised
+    {-# WARNING "This library is unlikely to perform well on architectures other than i386/x64/aarch64" #-}
 #endif
 #if __GLASGOW_HASKELL__ < 708
     {-# WARNING "Waking up blocked writers may be slower than desired in GHC<7.8 which makes readMVar non-blocking on full MVars. Nextidering upgrading." #-}

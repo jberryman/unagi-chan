@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns , DeriveDataTypeable, CPP #-}
 module Control.Concurrent.Chan.Unagi.NoBlocking.Unboxed.Internal
-#ifdef NOT_x86
-    {-# WARNING "This library is unlikely to perform well on architectures without a fetch-and-add instruction" #-}
+#ifdef NOT_optimised
+    {-# WARNING "This library is unlikely to perform well on architectures other than i386/x64/aarch64" #-}
 #endif
     (sEGMENT_LENGTH
     , InChan(..), OutChan(..), ChanEnd(..), Cell, Stream(..)
