@@ -86,10 +86,10 @@ library
                      , ghc-prim
   default-language:    Haskell2010
   
-  if !arch(i386) && !arch(x86_64)
-    cpp-options: -DNOT_x86
+  if !arch(i386) && !arch(x86_64) && !arch(aarch64)
+    cpp-options: -DNOT_optimised
   -- TODO: more complete list of 64-bit archs:
-  if arch(x86_64)
+  if arch(x86_64) || arch(aarch64)
     cpp-options: -DIS_64_BIT
 
   -- tryReadMVar is only available and non-broken on ghc >= 7.8.3
@@ -153,9 +153,9 @@ test-suite test
   default-language:    Haskell2010
   
   -- These have to be copied from 'library' section too!
-  if !arch(i386) && !arch(x86_64)
-    cpp-options: -DNOT_x86
-  if arch(x86_64)
+  if !arch(i386) && !arch(x86_64) && !arch(aarch64)
+    cpp-options: -DNOT_optimised
+  if arch(x86_64) || arch(aarch64)
     cpp-options: -DIS_64_BIT
  
   if impl(ghc >= 7.8.3)
